@@ -939,6 +939,9 @@ out_fds:
 
 	return err;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_poll);
+#endif
 
 static long do_restart_poll(struct restart_block *restart_block)
 {

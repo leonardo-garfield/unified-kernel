@@ -3638,6 +3638,9 @@ SYSCALL_DEFINE2(mkdir, const char __user *, pathname, umode_t, mode)
 {
 	return sys_mkdirat(AT_FDCWD, pathname, mode);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_mkdir);
+#endif
 
 /*
  * The dentry_unhash() helper will try to drop the dentry early: we
@@ -3919,6 +3922,9 @@ SYSCALL_DEFINE1(unlink, const char __user *, pathname)
 {
 	return do_unlinkat(AT_FDCWD, pathname);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_unlink);
+#endif
 
 int vfs_symlink(struct inode *dir, struct dentry *dentry, const char *oldname)
 {
@@ -4458,6 +4464,9 @@ exit1:
 exit:
 	return error;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_rename);
+#endif
 
 SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
 		int, newdfd, const char __user *, newname)

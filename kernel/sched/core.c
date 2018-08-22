@@ -2288,6 +2288,9 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 	put_cpu();
 	return 0;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sched_fork);
+#endif
 
 unsigned long to_ratio(u64 period, u64 runtime)
 {
@@ -2430,6 +2433,9 @@ void wake_up_new_task(struct task_struct *p)
 #endif
 	task_rq_unlock(rq, p, &flags);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(wake_up_new_task);
+#endif
 
 #ifdef CONFIG_PREEMPT_NOTIFIERS
 
@@ -2684,6 +2690,9 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
 	if (current->set_child_tid)
 		put_user(task_pid_vnr(current), current->set_child_tid);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(schedule_tail);
+#endif
 
 /*
  * context_switch - switch to the new MM and the new thread's register state.

@@ -30,6 +30,9 @@
 #include <linux/limits.h>
 #include <linux/sched.h>
 #include <asm/elf.h>
+#ifdef CONFIG_UNIFIED_KERNEL
+#include <linux/module.h>
+#endif
 
 struct va_alignment __read_mostly va_align = {
 	.flags = -1,
@@ -121,3 +124,6 @@ const char *arch_vma_name(struct vm_area_struct *vma)
 		return "[mpx]";
 	return NULL;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(arch_pick_mmap_layout);
+#endif

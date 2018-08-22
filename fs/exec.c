@@ -66,6 +66,11 @@
 #include "internal.h"
 
 #include <trace/events/sched.h>
+#ifdef CONFIG_UNIFIED_KERNEL
+#include <linux/win32_thread.h>
+
+extern struct task_ethread_operations* tet_ops;
+#endif
 
 int suid_dumpable = 0;
 
@@ -912,7 +917,11 @@ static int exec_mmap(struct mm_struct *mm)
  * disturbing other processes.  (Other processes might share the signal
  * table via the CLONE_SIGHAND option to clone().)
  */
+#ifdef CONFIG_UNIFIED_KERNEL
+int de_thread(struct task_struct *tsk)
+#else
 static int de_thread(struct task_struct *tsk)
+#endif
 {
 	struct signal_struct *sig = tsk->signal;
 	struct sighand_struct *oldsighand = tsk->sighand;
@@ -1076,6 +1085,9 @@ killed:
 	read_unlock(&tasklist_lock);
 	return -EAGAIN;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(de_thread);
+#endif
 
 char *get_task_comm(char *buf, struct task_struct *tsk)
 {
@@ -1127,6 +1139,11 @@ int flush_old_exec(struct linux_binprm * bprm)
 	retval = exec_mmap(bprm->mm);
 	if (retval)
 		goto out;
+
+#ifdef CONFIG_UNIFIED_KERNEL
+    if(current->ethread)
+        tet_ops->ethread_notify_execve(current);
+#endif
 
 	bprm->mm = NULL;		/* We're using it now */
 
@@ -1778,6 +1795,9 @@ COMPAT_SYSCALL_DEFINE3(execve, const char __user *, filename,
 {
 	return compat_do_execve(getname(filename), argv, envp);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(set_dumpable);
+#endif
 
 COMPAT_SYSCALL_DEFINE5(execveat, int, fd,
 		       const char __user *, filename,

@@ -58,6 +58,19 @@
 #define arch_rebalance_pgtables(addr, len)		(addr)
 #endif
 
+#ifdef CONFIG_UNIFIED_KERNEL
+
+#define MAP_RESERVE     0x10000000
+#define MAP_TOP_DOWN    0x20000000
+
+#define MMAP_TOP_DOWN_BASE	0x7fff0000
+
+#define RESERVE_PAGE_SIZE	(16 * PAGE_SIZE)
+#define RESERVE_PAGE_SHIFT	(PAGE_SHIFT + 4)
+#define RESERVE_PAGE_MASK	(~(RESERVE_PAGE_SIZE - 1))
+
+#endif
+
 static void unmap_region(struct mm_struct *mm,
 		struct vm_area_struct *vma, struct vm_area_struct *prev,
 		unsigned long start, unsigned long end);
@@ -1939,6 +1952,9 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 	struct mm_struct *mm = current->mm;
 	struct vm_area_struct *vma, *prev;
 	struct vm_unmapped_area_info info;
+#ifdef CONFIG_UNIFIED_KERNEL
+    unsigned long reserved_len = (len + RESERVE_PAGE_SIZE - 1) & RESERVE_PAGE_MASK;
+#endif
 
 	if (len > TASK_SIZE - mmap_min_addr)
 		return -ENOMEM;
@@ -1946,12 +1962,30 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 	if (flags & MAP_FIXED)
 		return addr;
 
+#ifdef CONFIG_UNIFIED_KERNEL
+	if (current->ethread && (flags & MAP_TOP_DOWN)) {
+		unsigned long old_mmap_base = mm->mmap_base;
+
+		mm->mmap_base = MMAP_TOP_DOWN_BASE;
+		addr = arch_get_unmapped_area_topdown(filp, addr, len, pgoff, flags);
+		mm->mmap_base = old_mmap_base;
+		return addr;
+	}
+#endif
+
 	if (addr) {
 		addr = PAGE_ALIGN(addr);
 		vma = find_vma_prev(mm, addr, &prev);
 		if (TASK_SIZE - len >= addr && addr >= mmap_min_addr &&
 		    (!vma || addr + len <= vm_start_gap(vma)) &&
 		    (!prev || addr >= vm_end_gap(prev)))
+#ifdef CONFIG_UNIFIED_KERNEL
+			if (current->ethread && (flags & MAP_RESERVE)) {
+				addr = ((addr + RESERVE_PAGE_SIZE - 1) & RESERVE_PAGE_MASK);
+				if (addr + reserved_len > vma->vm_start)
+					addr = vma->vm_end;
+			}
+#endif
 			return addr;
 	}
 

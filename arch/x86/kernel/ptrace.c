@@ -41,6 +41,10 @@
 
 #include "tls.h"
 
+#ifdef CONFIG_UNIFIED_KERNEL
+#include <linux/module.h>
+#endif
+
 enum x86_regset {
 	REGSET_GENERAL,
 	REGSET_FP,
@@ -642,7 +646,11 @@ static int ptrace_modify_breakpoint(struct perf_event *bp, int len, int type,
 /*
  * Handle ptrace writes to debug register 7.
  */
+#ifdef CONFIG_UNIFIED_KERNEL
+int ptrace_write_dr7(struct task_struct *tsk, unsigned long data)
+#else
 static int ptrace_write_dr7(struct task_struct *tsk, unsigned long data)
+#endif
 {
 	struct thread_struct *thread = &tsk->thread;
 	unsigned long old_dr7;
@@ -710,6 +718,9 @@ static unsigned long ptrace_get_debugreg(struct task_struct *tsk, int n)
 	}
 	return val;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(ptrace_write_dr7);
+#endif
 
 static int ptrace_set_breakpoint_addr(struct task_struct *tsk, int nr,
 				      unsigned long addr)
@@ -779,6 +790,9 @@ static int ioperm_active(struct task_struct *target,
 {
 	return target->thread.io_bitmap_max / regset->size;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(ptrace_set_breakpoint_addr);
+#endif
 
 static int ioperm_get(struct task_struct *target,
 		      const struct user_regset *regset,
@@ -1432,6 +1446,9 @@ void user_single_step_siginfo(struct task_struct *tsk,
 {
 	fill_sigtrap_info(tsk, regs, 0, TRAP_BRKPT, info);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(syscall_trace_enter);
+#endif
 
 void send_sigtrap(struct task_struct *tsk, struct pt_regs *regs,
 					 int error_code, int si_code)

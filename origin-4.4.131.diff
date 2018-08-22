@@ -1,0 +1,2335 @@
+diff --git a/arch/x86/entry/common.c b/arch/x86/entry/common.c
+index b5eb1cc..c238dd6 100644
+--- a/arch/x86/entry/common.c
++++ b/arch/x86/entry/common.c
+@@ -265,6 +265,9 @@ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
+ 
+ 	}
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(exit_to_usermode_loop);
++#endif
+ 
+ /* Called with IRQs disabled. */
+ __visible inline void prepare_exit_to_usermode(struct pt_regs *regs)
+@@ -321,6 +324,9 @@ static void syscall_slow_exit_work(struct pt_regs *regs, u32 cached_flags)
+ 	if (step || cached_flags & _TIF_SYSCALL_TRACE)
+ 		tracehook_report_syscall_exit(regs, step);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(syscall_slow_exit_work);
++#endif
+ 
+ /*
+  * Called with IRQs on and fully valid regs.  Returns with IRQs off in a
+diff --git a/arch/x86/entry/vdso/vma.c b/arch/x86/entry/vdso/vma.c
+index b8f69e2..b4710cf 100644
+--- a/arch/x86/entry/vdso/vma.c
++++ b/arch/x86/entry/vdso/vma.c
+@@ -228,6 +228,12 @@ int compat_arch_setup_additional_pages(struct linux_binprm *bprm,
+ 	return 0;
+ #endif
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(compat_arch_setup_additional_pages);
++#endif
++#endif
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(arch_setup_additional_pages);
+ #endif
+ #else
+ int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)
+diff --git a/arch/x86/include/asm/irq_vectors.h b/arch/x86/include/asm/irq_vectors.h
+index 6ca9fd6..a6d5aba 100644
+--- a/arch/x86/include/asm/irq_vectors.h
++++ b/arch/x86/include/asm/irq_vectors.h
+@@ -28,11 +28,24 @@
+ #define NMI_VECTOR			0x02
+ #define MCE_VECTOR			0x12
+ 
++#ifndef CONFIG_UNIFIED_KERNEL
+ /*
+  * IDT vectors usable for external interrupt sources start at 0x20.
+  * (0x80 is the syscall vector, 0x30-0x3f are for ISA)
+  */
+ #define FIRST_EXTERNAL_VECTOR		0x20
++#else
++/*
++ * IDT vectors usable for external interrupt sources start
++ * at 0x30, as 0x20-0x2f are used by Win32 system call implementation:
++ */
++#define FIRST_EXTERNAL_VECTOR		0x30
++/*
++ * For Unified Kernel, 16 more IRQ's are reserved for win32 system
++ * call implementation, and thus the number of potential APIC 
++ * interrupt sources is reduced by 16. 
++ */
++#endif
+ /*
+  * We start allocating at 0x21 to spread out vectors evenly between
+  * priority levels. (0x80 is the syscall vector)
+@@ -134,10 +147,17 @@
+ #define IO_APIC_VECTOR_LIMIT		(32 * MAX_IO_APICS)
+ 
+ #if defined(CONFIG_X86_IO_APIC) && defined(CONFIG_PCI_MSI)
++#ifndef CONFIG_UNIFIED_KERNEL
+ #define NR_IRQS						\
+ 	(CPU_VECTOR_LIMIT > IO_APIC_VECTOR_LIMIT ?	\
+ 		(NR_VECTORS + CPU_VECTOR_LIMIT)  :	\
+ 		(NR_VECTORS + IO_APIC_VECTOR_LIMIT))
++#else
++#define NR_IRQS						\
++	(CPU_VECTOR_LIMIT > IO_APIC_VECTOR_LIMIT ?	\
++		(NR_VECTORS + CPU_VECTOR_LIMIT - 16)  :	\
++		(NR_VECTORS + IO_APIC_VECTOR_LIMIT - 16))
++#endif
+ #elif defined(CONFIG_X86_IO_APIC)
+ #define	NR_IRQS				(NR_VECTORS + IO_APIC_VECTOR_LIMIT)
+ #elif defined(CONFIG_PCI_MSI)
+diff --git a/arch/x86/include/asm/thread_info.h b/arch/x86/include/asm/thread_info.h
+index 9b02820..ffa3c6a 100644
+--- a/arch/x86/include/asm/thread_info.h
++++ b/arch/x86/include/asm/thread_info.h
+@@ -134,6 +134,11 @@ struct thread_info {
+ #define _TIF_ADDR32		(1 << TIF_ADDR32)
+ #define _TIF_X32		(1 << TIF_X32)
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++#define TIF_APC                 13
++#define _TIF_APC                (1<<TIF_APC)
++#endif
++
+ /* work to do in syscall_trace_enter() */
+ #define _TIF_WORK_SYSCALL_ENTRY	\
+ 	(_TIF_SYSCALL_TRACE | _TIF_SYSCALL_EMU | _TIF_SYSCALL_AUDIT |	\
+diff --git a/arch/x86/kernel/hw_breakpoint.c b/arch/x86/kernel/hw_breakpoint.c
+index 50a3fad..b16b78c 100644
+--- a/arch/x86/kernel/hw_breakpoint.c
++++ b/arch/x86/kernel/hw_breakpoint.c
+@@ -413,6 +413,9 @@ void flush_ptrace_hw_breakpoint(struct task_struct *tsk)
+ 	t->debugreg6 = 0;
+ 	t->ptrace_dr7 = 0;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(flush_ptrace_hw_breakpoint);
++#endif
+ 
+ void hw_breakpoint_restore(void)
+ {
+diff --git a/arch/x86/kernel/ldt.c b/arch/x86/kernel/ldt.c
+index bc42936..680e9ce 100644
+--- a/arch/x86/kernel/ldt.c
++++ b/arch/x86/kernel/ldt.c
+@@ -155,6 +155,45 @@ out_unlock:
+ 	return retval;
+ }
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++int init_new_context_from_task(struct task_struct *ptsk, struct task_struct *tsk, struct mm_struct *mm)
++{
++	struct ldt_struct *new_ldt;
++	struct mm_struct * old_mm;
++	int retval = 0;
++
++	mutex_init(&mm->context.lock);
++	old_mm = ptsk->mm;
++	if (!old_mm) {
++		mm->context.ldt = NULL;
++		return 0;
++	}
++
++	mutex_lock(&old_mm->context.lock);
++	if (!old_mm->context.ldt) {
++		mm->context.ldt = NULL;
++		goto out_unlock;
++	}
++
++	new_ldt = alloc_ldt_struct(old_mm->context.ldt->size);
++	if (!new_ldt) {
++		retval = -ENOMEM;
++		goto out_unlock;
++	}
++
++	memcpy(new_ldt->entries, old_mm->context.ldt->entries,
++	       new_ldt->size * LDT_ENTRY_SIZE);
++	finalize_ldt_struct(new_ldt);
++
++	mm->context.ldt = new_ldt;
++
++out_unlock:
++	mutex_unlock(&old_mm->context.lock);
++	return retval;
++
++}
++#endif
++
+ /*
+  * No need to lock the MM as we are the last user
+  *
+diff --git a/arch/x86/kernel/process.c b/arch/x86/kernel/process.c
+index 7c5c5dc..417c158 100644
+--- a/arch/x86/kernel/process.c
++++ b/arch/x86/kernel/process.c
+@@ -120,6 +120,37 @@ void exit_thread(void)
+ 	fpu__drop(fpu);
+ }
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++/*
++ *  Free thread data structures etc..
++ */
++void exit_thread_for_task(struct task_struct *tsk)
++{
++	struct thread_struct *t = &tsk->thread;
++	unsigned long *bp = t->io_bitmap_ptr;
++	struct fpu *fpu = &t->fpu;
++
++	if (bp) {
++		struct tss_struct *tss = &per_cpu(cpu_tss, get_cpu());
++
++		t->io_bitmap_ptr = NULL;
++		clear_thread_flag(TIF_IO_BITMAP);
++		/*
++		 * Careful, clear this in the TSS too:
++		 */
++		memset(tss->io_bitmap, 0xff, t->io_bitmap_max);
++		t->io_bitmap_max = 0;
++		put_cpu();
++		kfree(bp);
++	}
++
++	free_vm86(t);
++
++	fpu__drop(fpu);
++
++}
++#endif
++
+ void flush_thread(void)
+ {
+ 	struct task_struct *tsk = current;
+@@ -502,6 +533,9 @@ unsigned long arch_align_stack(unsigned long sp)
+ 		sp -= get_random_int() % 8192;
+ 	return sp & ~0xf;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(arch_align_stack);
++#endif
+ 
+ unsigned long arch_randomize_brk(struct mm_struct *mm)
+ {
+diff --git a/arch/x86/kernel/ptrace.c b/arch/x86/kernel/ptrace.c
+index 479a409..1cfb18c 100644
+--- a/arch/x86/kernel/ptrace.c
++++ b/arch/x86/kernel/ptrace.c
+@@ -41,6 +41,10 @@
+ 
+ #include "tls.h"
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/module.h>
++#endif
++
+ enum x86_regset {
+ 	REGSET_GENERAL,
+ 	REGSET_FP,
+@@ -642,7 +646,11 @@ static int ptrace_modify_breakpoint(struct perf_event *bp, int len, int type,
+ /*
+  * Handle ptrace writes to debug register 7.
+  */
++#ifdef CONFIG_UNIFIED_KERNEL
++int ptrace_write_dr7(struct task_struct *tsk, unsigned long data)
++#else
+ static int ptrace_write_dr7(struct task_struct *tsk, unsigned long data)
++#endif
+ {
+ 	struct thread_struct *thread = &tsk->thread;
+ 	unsigned long old_dr7;
+@@ -710,6 +718,9 @@ static unsigned long ptrace_get_debugreg(struct task_struct *tsk, int n)
+ 	}
+ 	return val;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(ptrace_write_dr7);
++#endif
+ 
+ static int ptrace_set_breakpoint_addr(struct task_struct *tsk, int nr,
+ 				      unsigned long addr)
+@@ -779,6 +790,9 @@ static int ioperm_active(struct task_struct *target,
+ {
+ 	return target->thread.io_bitmap_max / regset->size;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(ptrace_set_breakpoint_addr);
++#endif
+ 
+ static int ioperm_get(struct task_struct *target,
+ 		      const struct user_regset *regset,
+@@ -1432,6 +1446,9 @@ void user_single_step_siginfo(struct task_struct *tsk,
+ {
+ 	fill_sigtrap_info(tsk, regs, 0, TRAP_BRKPT, info);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(syscall_trace_enter);
++#endif
+ 
+ void send_sigtrap(struct task_struct *tsk, struct pt_regs *regs,
+ 					 int error_code, int si_code)
+diff --git a/arch/x86/kernel/signal.c b/arch/x86/kernel/signal.c
+index cb6282c..d08fd86 100644
+--- a/arch/x86/kernel/signal.c
++++ b/arch/x86/kernel/signal.c
+@@ -42,6 +42,9 @@
+ #include <asm/syscalls.h>
+ 
+ #include <asm/sigframe.h>
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/module.h>
++#endif
+ 
+ #define COPY(x)			do {			\
+ 	get_user_ex(regs->x, &sc->x);			\
+diff --git a/arch/x86/kernel/traps.c b/arch/x86/kernel/traps.c
+index 1fbd263..a717471 100644
+--- a/arch/x86/kernel/traps.c
++++ b/arch/x86/kernel/traps.c
+@@ -822,6 +822,46 @@ void __init early_trap_pf_init(void)
+ #endif
+ }
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++int set_w32system_gate(unsigned int n, void *addr)
++{
++	/* 0x20 ~ 0x2f could be set */
++	if ((n & 0xfffffff0) != 0x20)
++		return -1;
++	_set_gate(n, GATE_TRAP, addr, 0x3, 0, __KERNEL_CS);
++	return 0;
++}
++EXPORT_SYMBOL(set_w32system_gate);
++
++int backup_idt_entry(unsigned int n, unsigned long *a, unsigned long *b)
++{
++	unsigned long	*gate_addr;
++
++	/* 0x20 ~ 0x2f could be backup */
++	if ((n & 0xfffffff0) != 0x20)
++		return -1;
++	gate_addr = (unsigned long *)(idt_table + n);
++	*a = *gate_addr;
++	*b = *(gate_addr + 1);
++	return 0;
++}
++EXPORT_SYMBOL(backup_idt_entry);
++
++int restore_idt_entry(unsigned int n, unsigned long a, unsigned long b)
++{
++	unsigned long	*gate_addr;
++
++	/* 0x20 ~ 0x2f could be restore */
++	if ((n & 0xfffffff0) != 0x20)
++		return -1;
++	gate_addr = (unsigned long *)(idt_table + n);
++	*gate_addr = a;
++	*(gate_addr + 1) = b;
++	return 0;
++}
++EXPORT_SYMBOL(restore_idt_entry);
++#endif
++
+ void __init trap_init(void)
+ {
+ 	int i;
+diff --git a/arch/x86/kernel/vm86_32.c b/arch/x86/kernel/vm86_32.c
+index af57736..483301e 100644
+--- a/arch/x86/kernel/vm86_32.c
++++ b/arch/x86/kernel/vm86_32.c
+@@ -54,6 +54,10 @@
+ #include <asm/traps.h>
+ #include <asm/vm86.h>
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/module.h>
++#endif
++
+ /*
+  * Known problems:
+  *
+@@ -157,6 +161,9 @@ void save_v86_state(struct kernel_vm86_regs *regs, int retval)
+ 
+ 	regs->pt.ax = retval;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(save_v86_state);
++#endif
+ 
+ static void mark_screen_rdonly(struct mm_struct *mm)
+ {
+diff --git a/arch/x86/mm/mmap.c b/arch/x86/mm/mmap.c
+index 307f60e..c93aeec 100644
+--- a/arch/x86/mm/mmap.c
++++ b/arch/x86/mm/mmap.c
+@@ -30,6 +30,9 @@
+ #include <linux/limits.h>
+ #include <linux/sched.h>
+ #include <asm/elf.h>
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/module.h>
++#endif
+ 
+ struct va_alignment __read_mostly va_align = {
+ 	.flags = -1,
+@@ -121,3 +124,6 @@ const char *arch_vma_name(struct vm_area_struct *vma)
+ 		return "[mpx]";
+ 	return NULL;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(arch_pick_mmap_layout);
++#endif
+diff --git a/fs/dcache.c b/fs/dcache.c
+index 751a0d8..a93c051 100644
+--- a/fs/dcache.c
++++ b/fs/dcache.c
+@@ -3323,6 +3323,9 @@ out:
+ 	__putname(page);
+ 	return error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_getcwd);
++#endif
+ 
+ /*
+  * Test whether new_dentry is a subdirectory of old_dentry.
+diff --git a/fs/eventpoll.c b/fs/eventpoll.c
+index 1b08556..180dc48 100644
+--- a/fs/eventpoll.c
++++ b/fs/eventpoll.c
+@@ -1822,6 +1822,9 @@ SYSCALL_DEFINE1(epoll_create, int, size)
+ 
+ 	return sys_epoll_create1(0);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_epoll_create);
++#endif
+ 
+ /*
+  * The following function implements the controller interface for
+@@ -1840,9 +1843,17 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
+ 	struct eventpoll *tep = NULL;
+ 
+ 	error = -EFAULT;
++#ifdef CONFIG_UNIFIED_KERNEL
++	if ((unsigned long)event >= 0xC0000000) {
++		memcpy(&epds, event, sizeof(struct epoll_event));
++	}
++	else if (copy_from_user(&epds, event, sizeof(struct epoll_event)))
++		goto error_return;
++#else
+ 	if (ep_op_has_event(op) &&
+ 	    copy_from_user(&epds, event, sizeof(struct epoll_event)))
+ 		goto error_return;
++#endif
+ 
+ 	error = -EBADF;
+ 	f = fdget(epfd);
+@@ -1964,6 +1975,9 @@ error_return:
+ 
+ 	return error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_epoll_ctl);
++#endif
+ 
+ /*
+  * Implement the event wait interface for the eventpoll file. It is the kernel
+@@ -1980,9 +1994,11 @@ SYSCALL_DEFINE4(epoll_wait, int, epfd, struct epoll_event __user *, events,
+ 	if (maxevents <= 0 || maxevents > EP_MAX_EVENTS)
+ 		return -EINVAL;
+ 
++#ifndef CONFIG_UNIFIED_KERNEL
+ 	/* Verify that the area passed by the user is writeable */
+ 	if (!access_ok(VERIFY_WRITE, events, maxevents * sizeof(struct epoll_event)))
+ 		return -EFAULT;
++#endif
+ 
+ 	/* Get the "struct file *" for the eventpoll file */
+ 	f = fdget(epfd);
+@@ -2010,6 +2026,50 @@ error_fput:
+ 	fdput(f);
+ 	return error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_epoll_wait);
++#endif
++
++#ifdef CONFIG_UNIFIED_KERNEL
++int uk_epoll_wait(int epfd, struct epoll_event __user * events,
++		int maxevents, int timeout)
++{
++	int error;
++	struct fd f;
++	struct eventpoll *ep;
++
++	/* The maximum number of event must be greater than zero */
++	if (maxevents <= 0 || maxevents > EP_MAX_EVENTS)
++		return -EINVAL;
++
++	/* Get the "struct file *" for the eventpoll file */
++	f = fdget(epfd);
++	if (!f.file)
++		return -EBADF;
++
++	/*
++	 * We have to check that the file structure underneath the fd
++	 * the user passed to us _is_ an eventpoll file.
++	 */
++	error = -EINVAL;
++	if (!is_file_epoll(f.file))
++		goto error_fput;
++
++	/*
++	 * At this point it is safe to assume that the "private_data" contains
++	 * our own data structure.
++	 */
++	ep = f.file->private_data;
++
++	/* Time to fish for events ... */
++	error = ep_poll(ep, events, maxevents, timeout);
++
++error_fput:
++	fdput(f);
++	return error;
++}
++EXPORT_SYMBOL(uk_epoll_wait);
++#endif
+ 
+ /*
+  * Implement the event wait interface for the eventpoll file. It is the kernel
+diff --git a/fs/exec.c b/fs/exec.c
+index 9c5ee2a..75f84dd 100644
+--- a/fs/exec.c
++++ b/fs/exec.c
+@@ -66,6 +66,11 @@
+ #include "internal.h"
+ 
+ #include <trace/events/sched.h>
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/win32_thread.h>
++
++extern struct task_ethread_operations* tet_ops;
++#endif
+ 
+ int suid_dumpable = 0;
+ 
+@@ -912,7 +917,11 @@ static int exec_mmap(struct mm_struct *mm)
+  * disturbing other processes.  (Other processes might share the signal
+  * table via the CLONE_SIGHAND option to clone().)
+  */
++#ifdef CONFIG_UNIFIED_KERNEL
++int de_thread(struct task_struct *tsk)
++#else
+ static int de_thread(struct task_struct *tsk)
++#endif
+ {
+ 	struct signal_struct *sig = tsk->signal;
+ 	struct sighand_struct *oldsighand = tsk->sighand;
+@@ -1076,6 +1085,9 @@ killed:
+ 	read_unlock(&tasklist_lock);
+ 	return -EAGAIN;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(de_thread);
++#endif
+ 
+ char *get_task_comm(char *buf, struct task_struct *tsk)
+ {
+@@ -1128,6 +1140,11 @@ int flush_old_exec(struct linux_binprm * bprm)
+ 	if (retval)
+ 		goto out;
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++    if(current->ethread)
++        tet_ops->ethread_notify_execve(current);
++#endif
++
+ 	bprm->mm = NULL;		/* We're using it now */
+ 
+ 	set_fs(USER_DS);
+@@ -1778,6 +1795,9 @@ COMPAT_SYSCALL_DEFINE3(execve, const char __user *, filename,
+ {
+ 	return compat_do_execve(getname(filename), argv, envp);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(set_dumpable);
++#endif
+ 
+ COMPAT_SYSCALL_DEFINE5(execveat, int, fd,
+ 		       const char __user *, filename,
+diff --git a/fs/ext4/namei.c b/fs/ext4/namei.c
+index 32960b3..e42d111 100644
+--- a/fs/ext4/namei.c
++++ b/fs/ext4/namei.c
+@@ -38,6 +38,9 @@
+ 
+ #include "xattr.h"
+ #include "acl.h"
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/ctype.h>
++#endif
+ 
+ #include <trace/events/ext4.h>
+ /*
+@@ -1255,6 +1258,15 @@ static inline int ext4_match(struct ext4_filename *fname,
+ #endif
+ 	if (de->name_len != len)
+ 		return 0;
++#ifdef CONFIG_UNIFIED_KERNEL
++    if(current->ethread) {
++        int i;
++        for(i = 0; i < len; i++)
++            if(tolower(((char *)name)[i]) != tolower(((char *)de->name)[i]))
++                return 0;
++        return 1;
++    }
++#endif
+ 	return (memcmp(de->name, name, len) == 0) ? 1 : 0;
+ }
+ 
+diff --git a/fs/fcntl.c b/fs/fcntl.c
+index 5df9149..6355c4f 100644
+--- a/fs/fcntl.c
++++ b/fs/fcntl.c
+@@ -131,6 +131,9 @@ void f_delown(struct file *filp)
+ {
+ 	f_modown(filp, NULL, PIDTYPE_PID, 1);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_dup2);
++#endif
+ 
+ pid_t f_getown(struct file *filp)
+ {
+@@ -142,6 +145,9 @@ pid_t f_getown(struct file *filp)
+ 	read_unlock(&filp->f_owner.lock);
+ 	return pid;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_dup);
++#endif
+ 
+ static int f_setown_ex(struct file *filp, unsigned long arg)
+ {
+@@ -379,6 +385,9 @@ out1:
+ out:
+ 	return err;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_fcntl);
++#endif
+ 
+ #if BITS_PER_LONG == 32
+ SYSCALL_DEFINE3(fcntl64, unsigned int, fd, unsigned int, cmd,
+diff --git a/fs/file.c b/fs/file.c
+index 39f8f15..9a94063 100644
+--- a/fs/file.c
++++ b/fs/file.c
+@@ -555,6 +555,9 @@ static int alloc_fd(unsigned start, unsigned flags)
+ {
+ 	return __alloc_fd(current->files, start, rlimit(RLIMIT_NOFILE), flags);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(alloc_fd);
++#endif
+ 
+ int get_unused_fd_flags(unsigned flags)
+ {
+diff --git a/fs/namei.c b/fs/namei.c
+index de57dd5..2c50e0d 100644
+--- a/fs/namei.c
++++ b/fs/namei.c
+@@ -3638,6 +3638,9 @@ SYSCALL_DEFINE2(mkdir, const char __user *, pathname, umode_t, mode)
+ {
+ 	return sys_mkdirat(AT_FDCWD, pathname, mode);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_mkdir);
++#endif
+ 
+ /*
+  * The dentry_unhash() helper will try to drop the dentry early: we
+@@ -3919,6 +3922,9 @@ SYSCALL_DEFINE1(unlink, const char __user *, pathname)
+ {
+ 	return do_unlinkat(AT_FDCWD, pathname);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_unlink);
++#endif
+ 
+ int vfs_symlink(struct inode *dir, struct dentry *dentry, const char *oldname)
+ {
+@@ -4458,6 +4464,9 @@ exit1:
+ exit:
+ 	return error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_rename);
++#endif
+ 
+ SYSCALL_DEFINE4(renameat, int, olddfd, const char __user *, oldname,
+ 		int, newdfd, const char __user *, newname)
+diff --git a/fs/open.c b/fs/open.c
+index fbc5c7b..4299e1c 100644
+--- a/fs/open.c
++++ b/fs/open.c
+@@ -197,6 +197,9 @@ out_putf:
+ out:
+ 	return error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_fstatfs);
++#endif
+ 
+ SYSCALL_DEFINE2(ftruncate, unsigned int, fd, unsigned long, length)
+ {
+@@ -216,6 +219,9 @@ SYSCALL_DEFINE2(truncate64, const char __user *, path, loff_t, length)
+ {
+ 	return do_sys_truncate(path, length);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(do_truncate);
++#endif
+ 
+ SYSCALL_DEFINE2(ftruncate64, unsigned int, fd, loff_t, length)
+ {
+@@ -328,6 +334,9 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
+ 	}
+ 	return error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_ftruncate);
++#endif
+ 
+ /*
+  * access() needs to use the real uid/gid, not the effective uid/gid.
+@@ -440,6 +449,9 @@ dput_and_out:
+ out:
+ 	return error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_chdir);
++#endif
+ 
+ SYSCALL_DEFINE1(fchdir, unsigned int, fd)
+ {
+@@ -971,6 +983,9 @@ struct file *file_open_name(struct filename *name, int flags, umode_t mode)
+ 	int err = build_open_flags(flags, mode, &op);
+ 	return err ? ERR_PTR(err) : do_filp_open(AT_FDCWD, name, &op);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_open);
++#endif
+ 
+ /**
+  * filp_open - open file and return file pointer
+diff --git a/fs/read_write.c b/fs/read_write.c
+index bfd1a5d..a2870da 100644
+--- a/fs/read_write.c
++++ b/fs/read_write.c
+@@ -573,6 +573,9 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
+ 	}
+ 	return ret;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_read);
++#endif
+ 
+ SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
+ 		size_t, count)
+@@ -590,6 +593,9 @@ SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
+ 
+ 	return ret;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_write);
++#endif
+ 
+ SYSCALL_DEFINE4(pread64, unsigned int, fd, char __user *, buf,
+ 			size_t, count, loff_t, pos)
+@@ -610,6 +616,9 @@ SYSCALL_DEFINE4(pread64, unsigned int, fd, char __user *, buf,
+ 
+ 	return ret;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_pread64);
++#endif
+ 
+ SYSCALL_DEFINE4(pwrite64, unsigned int, fd, const char __user *, buf,
+ 			 size_t, count, loff_t, pos)
+@@ -630,6 +639,9 @@ SYSCALL_DEFINE4(pwrite64, unsigned int, fd, const char __user *, buf,
+ 
+ 	return ret;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_pwrite64);
++#endif
+ 
+ /*
+  * Reduce an iovec's length in-place.  Return the resulting number of segments
+diff --git a/fs/select.c b/fs/select.c
+index f4dd55f..62b51df 100644
+--- a/fs/select.c
++++ b/fs/select.c
+@@ -939,6 +939,9 @@ out_fds:
+ 
+ 	return err;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_poll);
++#endif
+ 
+ static long do_restart_poll(struct restart_block *restart_block)
+ {
+diff --git a/fs/stat.c b/fs/stat.c
+index 004dd77..2839886 100644
+--- a/fs/stat.c
++++ b/fs/stat.c
+@@ -262,6 +262,9 @@ static int cp_new_stat(struct kstat *stat, struct stat __user *statbuf)
+ 	tmp.st_blksize = stat->blksize;
+ 	return copy_to_user(statbuf,&tmp,sizeof(tmp)) ? -EFAULT : 0;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_newstat);
++#endif
+ 
+ SYSCALL_DEFINE2(newstat, const char __user *, filename,
+ 		struct stat __user *, statbuf)
+@@ -286,6 +289,9 @@ SYSCALL_DEFINE2(newlstat, const char __user *, filename,
+ 
+ 	return cp_new_stat(&stat, statbuf);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_newlstat);
++#endif
+ 
+ #if !defined(__ARCH_WANT_STAT64) || defined(__ARCH_WANT_SYS_NEWFSTATAT)
+ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
+@@ -311,6 +317,9 @@ SYSCALL_DEFINE2(newfstat, unsigned int, fd, struct stat __user *, statbuf)
+ 
+ 	return error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_newfstat);
++#endif
+ 
+ SYSCALL_DEFINE4(readlinkat, int, dfd, const char __user *, pathname,
+ 		char __user *, buf, int, bufsiz)
+@@ -351,6 +360,9 @@ SYSCALL_DEFINE3(readlink, const char __user *, path, char __user *, buf,
+ {
+ 	return sys_readlinkat(AT_FDCWD, path, buf, bufsiz);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_readlink);
++#endif
+ 
+ 
+ /* ---------- LFS-64 ----------- */
+diff --git a/fs/sync.c b/fs/sync.c
+index dd5d171..047d278 100644
+--- a/fs/sync.c
++++ b/fs/sync.c
+@@ -226,6 +226,9 @@ SYSCALL_DEFINE1(fsync, unsigned int, fd)
+ {
+ 	return do_fsync(fd, 0);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_fsync);
++#endif
+ 
+ SYSCALL_DEFINE1(fdatasync, unsigned int, fd)
+ {
+diff --git a/include/linux/init_task.h b/include/linux/init_task.h
+index 1c1ff7e..a7c2775 100644
+--- a/include/linux/init_task.h
++++ b/include/linux/init_task.h
+@@ -187,6 +187,7 @@ extern struct task_group root_task_group;
+  *  INIT_TASK is used to set up the first task table, touch at
+  * your own risk!. Base=0, limit=0x1fffff (=2MB)
+  */
++#ifndef CONFIG_UNIFIED_KERNEL
+ #define INIT_TASK(tsk)	\
+ {									\
+ 	.state		= 0,						\
+@@ -261,6 +262,83 @@ extern struct task_group root_task_group;
+ 	INIT_NUMA_BALANCING(tsk)					\
+ 	INIT_KASAN(tsk)							\
+ }
++#else
++#define INIT_TASK(tsk)	\
++{									\
++	.state		= 0,						\
++	.stack		= &init_thread_info,				\
++	.usage		= ATOMIC_INIT(2),				\
++	.flags		= PF_KTHREAD,					\
++	.prio		= MAX_PRIO-20,					\
++	.static_prio	= MAX_PRIO-20,					\
++	.normal_prio	= MAX_PRIO-20,					\
++	.policy		= SCHED_NORMAL,					\
++	.cpus_allowed	= CPU_MASK_ALL,					\
++	.nr_cpus_allowed= NR_CPUS,					\
++	.mm		= NULL,						\
++	.active_mm	= &init_mm,					\
++	.restart_block = {						\
++		.fn = do_no_restart_syscall,				\
++	},								\
++	.se		= {						\
++		.group_node 	= LIST_HEAD_INIT(tsk.se.group_node),	\
++	},								\
++	.rt		= {						\
++		.run_list	= LIST_HEAD_INIT(tsk.rt.run_list),	\
++		.time_slice	= RR_TIMESLICE,				\
++	},								\
++	.tasks		= LIST_HEAD_INIT(tsk.tasks),			\
++	INIT_PUSHABLE_TASKS(tsk)					\
++	INIT_CGROUP_SCHED(tsk)						\
++	.ptraced	= LIST_HEAD_INIT(tsk.ptraced),			\
++	.ptrace_entry	= LIST_HEAD_INIT(tsk.ptrace_entry),		\
++	.real_parent	= &tsk,						\
++	.parent		= &tsk,						\
++	.children	= LIST_HEAD_INIT(tsk.children),			\
++	.sibling	= LIST_HEAD_INIT(tsk.sibling),			\
++	.group_leader	= &tsk,						\
++	RCU_POINTER_INITIALIZER(real_cred, &init_cred),			\
++	RCU_POINTER_INITIALIZER(cred, &init_cred),			\
++	.comm		= INIT_TASK_COMM,				\
++	.thread		= INIT_THREAD,					\
++	.fs		= &init_fs,					\
++	.files		= &init_files,					\
++	.signal		= &init_signals,				\
++	.sighand	= &init_sighand,				\
++	.nsproxy	= &init_nsproxy,				\
++	.pending	= {						\
++		.list = LIST_HEAD_INIT(tsk.pending.list),		\
++		.signal = {{0}}},					\
++	.blocked	= {{0}},					\
++	.alloc_lock	= __RW_LOCK_UNLOCKED(tsk.alloc_lock),		\
++	.journal_info	= NULL,						\
++	.cpu_timers	= INIT_CPU_TIMERS(tsk.cpu_timers),		\
++	.pi_lock	= __RAW_SPIN_LOCK_UNLOCKED(tsk.pi_lock),	\
++	.timer_slack_ns = 50000, /* 50 usec default slack */		\
++	.pids = {							\
++		[PIDTYPE_PID]  = INIT_PID_LINK(PIDTYPE_PID),		\
++		[PIDTYPE_PGID] = INIT_PID_LINK(PIDTYPE_PGID),		\
++		[PIDTYPE_SID]  = INIT_PID_LINK(PIDTYPE_SID),		\
++	},								\
++	.thread_group	= LIST_HEAD_INIT(tsk.thread_group),		\
++	.thread_node	= LIST_HEAD_INIT(init_signals.thread_head),	\
++	INIT_IDS							\
++	INIT_PERF_EVENTS(tsk)						\
++	INIT_TRACE_IRQFLAGS						\
++	INIT_LOCKDEP							\
++	INIT_FTRACE_GRAPH						\
++	INIT_TRACE_RECURSION						\
++	INIT_TASK_RCU_PREEMPT(tsk)					\
++	INIT_TASK_RCU_TASKS(tsk)					\
++	INIT_CPUSET_SEQ(tsk)						\
++	INIT_RT_MUTEXES(tsk)						\
++	INIT_PREV_CPUTIME(tsk)						\
++	INIT_VTIME(tsk)							\
++	INIT_NUMA_BALANCING(tsk)					\
++	INIT_KASAN(tsk)							\
++	.ethread	= NULL,					\
++}
++#endif
+ 
+ 
+ #define INIT_CPU_TIMERS(cpu_timers)					\
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index 90bea39..ddd081d 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -139,6 +139,11 @@ struct nameidata;
+ #define VMACACHE_SIZE (1U << VMACACHE_BITS)
+ #define VMACACHE_MASK (VMACACHE_SIZE - 1)
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++#define	CREATE_PROCESS	1
++#define	CREATE_THREAD	2
++#endif
++
+ /*
+  * These are the constant used to fake the fixed-point load-average
+  * counting. Some notes:
+@@ -1606,7 +1611,11 @@ struct task_struct {
+    	u32 self_exec_id;
+ /* Protection of (de-)allocation: mm, files, fs, tty, keyrings, mems_allowed,
+  * mempolicy */
++#ifndef CONFIG_UNIFIED_KERNEL
+ 	spinlock_t alloc_lock;
++#else
++	rwlock_t alloc_lock;
++#endif
+ 
+ 	/* Protection of the PI data structures: */
+ 	raw_spinlock_t pi_lock;
+@@ -1832,6 +1841,9 @@ struct task_struct {
+ #endif
+ 	int pagefault_disabled;
+ /* CPU-specific state of this task */
++#ifdef CONFIG_UNIFIED_KERNEL
++    struct ethread *ethread;
++#endif
+ 	struct thread_struct thread;
+ /*
+  * WARNING: on x86, 'thread_struct' contains a variable-sized
+@@ -2757,12 +2769,20 @@ static inline int thread_group_empty(struct task_struct *p)
+  */
+ static inline void task_lock(struct task_struct *p)
+ {
++#ifndef CONFIG_UNIFIED_KERNEL
+ 	spin_lock(&p->alloc_lock);
++#else
++	write_lock(&p->alloc_lock);
++#endif
+ }
+ 
+ static inline void task_unlock(struct task_struct *p)
+ {
++#ifndef CONFIG_UNIFIED_KERNEL
+ 	spin_unlock(&p->alloc_lock);
++#else
++	write_unlock(&p->alloc_lock);
++#endif
+ }
+ 
+ extern struct sighand_struct *__lock_task_sighand(struct task_struct *tsk,
+diff --git a/init/Kconfig b/init/Kconfig
+index ef2f97d..bf7fbef 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -1817,6 +1817,10 @@ config TRACEPOINTS
+ 
+ source "arch/Kconfig"
+ 
++config UNIFIED_KERNEL
++	bool "Unified kernel support"
++	default y
++
+ endmenu		# General setup
+ 
+ config HAVE_GENERIC_DMA_COHERENT
+diff --git a/kernel/exit.c b/kernel/exit.c
+index ffba5df..a41d6a6 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -58,6 +58,11 @@
+ #include <asm/unistd.h>
+ #include <asm/pgtable.h>
+ #include <asm/mmu_context.h>
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/win32_thread.h>
++
++extern struct task_ethread_operations *tet_ops;
++#endif
+ 
+ static void exit_mm(struct task_struct *tsk);
+ 
+@@ -539,6 +544,9 @@ static void reparent_leader(struct task_struct *father, struct task_struct *p,
+ 
+ 	kill_orphaned_pgrp(p, father);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(put_files_struct);
++#endif
+ 
+ /*
+  * This does two things:
+@@ -740,6 +748,12 @@ void do_exit(long code)
+ 
+ 	exit_sem(tsk);
+ 	exit_shm(tsk);
++#ifdef CONFIG_UNIFIED_KERNEL
++    if(tsk->ethread) {
++        tet_ops->ethread_notify_exit(tsk, tsk->exit_code);
++        tet_ops->exit_ethread(tsk);
++    }
++#endif
+ 	exit_files(tsk);
+ 	exit_fs(tsk);
+ 	if (group_dead)
+@@ -833,6 +847,146 @@ void do_exit(long code)
+ }
+ EXPORT_SYMBOL_GPL(do_exit);
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++extern void exit_thread_for_task(struct task_struct *tsk);
++
++void do_exit_task(struct task_struct *tsk, long code)
++{
++	int group_dead;
++	TASKS_RCU(int tasks_rcu_i);
++
++	profile_task_exit(tsk);
++
++	WARN_ON(blk_needs_flush_plug(tsk));
++
++	if (unlikely(in_interrupt()))
++		panic("Aiee, killing interrupt handler!");
++	if (unlikely(!tsk->pid))
++		panic("Attempted to kill the idle task!");
++
++	/*
++	 * If do_exit is called because this processes oopsed, it's possible
++	 * that get_fs() was left as KERNEL_DS, so reset it to USER_DS before
++	 * continuing. Amongst other possible reasons, this is to prevent
++	 * mm_release()->clear_child_tid() from writing to a user-controlled
++	 * kernel address.
++	 */
++	set_fs(USER_DS);
++
++	ptrace_event(PTRACE_EVENT_EXIT, code);
++
++	validate_creds_for_do_exit(tsk);
++
++	/*
++	 * We're taking recursive faults here in do_exit. Safest is to just
++	 * leave this task alone and wait for reboot.
++	 */
++	if (unlikely(tsk->flags & PF_EXITING)) {
++		pr_alert("Fixing recursive fault but reboot is needed!\n");
++		/*
++		 * We can do this unlocked here. The futex code uses
++		 * this flag just to verify whether the pi state
++		 * cleanup has been done or not. In the worst case it
++		 * loops once more. We pretend that the cleanup was
++		 * done as there is no way to return. Either the
++		 * OWNER_DIED bit is set by now or we push the blocked
++		 * task into the wait for ever nirwana as well.
++		 */
++		tsk->flags |= PF_EXITPIDONE;
++		set_current_state(TASK_UNINTERRUPTIBLE);
++		schedule();
++	}
++
++	exit_signals(tsk);  /* sets PF_EXITING */
++	/*
++	 * tsk->flags are checked in the futex code to protect against
++	 * an exiting task cleaning up the robust pi futexes.
++	 */
++	smp_mb();
++	raw_spin_unlock_wait(&tsk->pi_lock);
++
++	if (unlikely(in_atomic())) {
++		pr_info("note: %s[%d] exited with preempt_count %d\n",
++			current->comm, task_pid_nr(current),
++			preempt_count());
++		preempt_count_set(PREEMPT_ENABLED);
++	}
++
++	/* sync mm's RSS info before statistics gathering */
++	if (tsk->mm)
++		sync_mm_rss(tsk->mm);
++	acct_update_integrals(tsk);
++	group_dead = atomic_dec_and_test(&tsk->signal->live);
++	if (group_dead) {
++		hrtimer_cancel(&tsk->signal->real_timer);
++		exit_itimers(tsk->signal);
++		if (tsk->mm)
++			setmax_mm_hiwater_rss(&tsk->signal->maxrss, tsk->mm);
++	}
++	acct_collect(code, group_dead);
++	if (group_dead)
++		tty_audit_exit();
++	audit_free(tsk);
++
++	tsk->exit_code = code;
++	taskstats_exit(tsk, group_dead);
++
++	exit_mm(tsk);
++
++	if (group_dead)
++		acct_process();
++	trace_sched_process_exit(tsk);
++
++	exit_sem(tsk);
++	exit_shm(tsk);
++#ifdef CONFIG_UNIFIED_KERNEL
++    if(tsk->ethread) {
++        tet_ops->ethread_notify_exit(tsk, tsk->exit_code);
++        tet_ops->exit_ethread(tsk);
++    }
++#endif
++	exit_files(tsk);
++	exit_fs(tsk);
++	if (group_dead)
++		disassociate_ctty(1);
++	exit_task_namespaces(tsk);
++	exit_task_work(tsk);
++	exit_thread();
++
++	/*
++	 * Flush inherited counters to the parent - before the parent
++	 * gets woken up by child-exit notifications.
++	 *
++	 * because of cgroup mode, must be called before cgroup_exit()
++	 */
++	perf_event_exit_task(tsk);
++
++	cgroup_exit(tsk);
++
++	/*
++	 * FIXME: do that only when needed, using sched_exit tracepoint
++	 */
++	flush_ptrace_hw_breakpoint(tsk);
++
++	TASKS_RCU(preempt_disable());
++	TASKS_RCU(tasks_rcu_i = __srcu_read_lock(&tasks_rcu_exit_srcu));
++	TASKS_RCU(preempt_enable());
++	exit_notify(tsk, group_dead);
++	proc_exit_connector(tsk);
++#ifdef CONFIG_NUMA
++	task_lock(tsk);
++	mpol_put(tsk->mempolicy);
++	tsk->mempolicy = NULL;
++	task_unlock(tsk);
++#endif
++#ifdef CONFIG_FUTEX
++	if (unlikely(current->pi_state_cache))
++		kfree(current->pi_state_cache);
++#endif
++}
++EXPORT_SYMBOL_GPL(do_exit_task);
++#endif
++
+ void complete_and_exit(struct completion *comp, long code)
+ {
+ 	if (comp)
+@@ -878,6 +1032,9 @@ do_group_exit(int exit_code)
+ 	do_exit(exit_code);
+ 	/* NOTREACHED */
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(do_group_exit);
++#endif
+ 
+ /*
+  * this kills every thread in the thread group. Note that any externally
+diff --git a/kernel/fork.c b/kernel/fork.c
+index ac00f14..647af89 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -89,6 +89,18 @@
+ #define CREATE_TRACE_POINTS
+ #include <trace/events/task.h>
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/win32_thread.h>
++
++struct task_ethread_operations* tet_ops;
++
++void init_tet_ops(struct task_ethread_operations* ops)
++{
++    tet_ops = ops;
++}
++EXPORT_SYMBOL(init_tet_ops);
++#endif
++
+ /*
+  * Minimum number of threads to boot the kernel
+  */
+@@ -1068,6 +1080,9 @@ static int copy_files(unsigned long clone_flags, struct task_struct *tsk)
+ out:
+ 	return error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(copy_files);
++#endif
+ 
+ static int copy_io(unsigned long clone_flags, struct task_struct *tsk)
+ {
+@@ -1372,7 +1387,11 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+ 	INIT_LIST_HEAD(&p->sibling);
+ 	rcu_copy_process(p);
+ 	p->vfork_done = NULL;
++#ifdef CONFIG_UNIFIED_KERNEL
++	rwlock_init(&p->alloc_lock);
++#else
+ 	spin_lock_init(&p->alloc_lock);
++#endif
+ 
+ 	init_sigpending(&p->pending);
+ 
+@@ -1518,6 +1537,12 @@ static struct task_struct *copy_process(unsigned long clone_flags,
+ 	if ((clone_flags & (CLONE_VM|CLONE_VFORK)) == CLONE_VM)
+ 		p->sas_ss_sp = p->sas_ss_size = 0;
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++	p->ethread= NULL;
++    if(current->ethread)
++        tet_ops->ethread_notify_fork(current, p, clone_flags);
++#endif
++
+ 	/*
+ 	 * Syscall tracing and stepping should be turned off in the
+ 	 * child regardless of CLONE_PTRACE.
+@@ -1967,7 +1992,11 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
+ /*
+  * Unshare file descriptor table if it is being shared
+  */
++#ifdef CONFIG_UNIFIED_KERNEL
++int unshare_fd(unsigned long unshare_flags, struct files_struct **new_fdp)
++#else
+ static int unshare_fd(unsigned long unshare_flags, struct files_struct **new_fdp)
++#endif
+ {
+ 	struct files_struct *fd = current->files;
+ 	int error = 0;
+@@ -1981,6 +2010,9 @@ static int unshare_fd(unsigned long unshare_flags, struct files_struct **new_fdp
+ 
+ 	return 0;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(unshare_fd);
++#endif
+ 
+ /*
+  * unshare allows a process to 'unshare' part of the process
+@@ -2150,3 +2182,713 @@ int sysctl_max_threads(struct ctl_table *table, int write,
+ 
+ 	return 0;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(unshare_files);
++#endif
++
++#ifdef CONFIG_UNIFIED_KERNEL
++/* FIXME: added for NtCreateProcess() and NtCreateThread() */
++
++extern int init_new_context_from_task(struct task_struct *ptsk, struct task_struct *tsk, struct mm_struct *mm);
++
++static inline void clone_files(struct task_struct *tsk)
++{
++	if (tsk->files)
++		atomic_inc(&tsk->files->count);
++}
++
++static inline void clone_fs(struct task_struct *tsk)
++{
++	struct fs_struct *fs = tsk->fs;
++
++	spin_lock(&fs->lock);
++	if (fs->in_exec) {
++		spin_unlock(&fs->lock);
++		return;
++	}
++	fs->users++;
++	spin_unlock(&fs->lock);
++}
++
++static inline void clone_sighand(struct task_struct *tsk)
++{
++	atomic_inc(&tsk->sighand->count);
++}
++
++static inline void clone_signal(struct task_struct *tsk)
++{
++	atomic_inc(&tsk->signal->sigcnt);
++	atomic_inc(&tsk->signal->live);
++}
++
++static inline int clone_mm(struct task_struct *parent, struct task_struct *child)
++{
++	struct mm_struct *mm, *oldmm;
++
++	child->min_flt = child->maj_flt = 0;
++	child->nvcsw = child->nivcsw = 0;
++#ifdef CONFIG_DETECT_HUNG_TASK
++	child->last_switch_count = child->nvcsw + child->nivcsw;
++#endif
++
++	child->mm = NULL;
++	child->active_mm = NULL;
++
++	/*
++	 * Are we cloning a kernel thread?
++	 *
++	 * We need to steal a active VM for that..
++	 */
++	oldmm = parent->mm;
++	if (!oldmm)
++		return 0;
++
++	atomic_inc(&oldmm->mm_users);
++	mm = oldmm;
++
++	/*
++	 * There are cases where the PTL is held to ensure no
++	 * new threads start up in user mode using an mm, which
++	 * allows optimizing out ipis; the tlb_gather_mmu code
++	 * is an example.
++	 */
++	spin_unlock_wait(&oldmm->page_table_lock);
++
++	child->mm = mm;
++	child->active_mm = mm;
++
++	return 0;
++}
++
++static int dup_files(struct task_struct * tsk)
++{
++	struct files_struct *newf;
++	struct fdtable *new_fdt;
++	int error;
++
++	error = -ENOMEM;
++	newf = kmem_cache_alloc(files_cachep, GFP_KERNEL);
++	if (!newf)
++		goto out;
++
++	atomic_set(&newf->count, 1);
++	newf->resize_in_progress = false;
++	init_waitqueue_head(&newf->resize_wait);
++
++	spin_lock_init(&newf->file_lock);
++	newf->next_fd = 0;
++	new_fdt = &newf->fdtab;
++	new_fdt->max_fds = NR_OPEN_DEFAULT;
++	new_fdt->close_on_exec = (unsigned long *)&newf->close_on_exec_init;
++	new_fdt->open_fds = (unsigned long *)&newf->open_fds_init;
++	new_fdt->full_fds_bits = (unsigned long *)&newf->full_fds_bits_init;
++	new_fdt->fd = &newf->fd_array[0];
++	init_rcu_head(&new_fdt->rcu);
++
++	rcu_assign_pointer(newf->fdt, new_fdt);
++
++	tsk->files = newf;
++	error = 0;
++
++out:
++	return error;
++}
++
++static inline int dup_sighand(struct task_struct *parent, struct task_struct *child)
++{
++	struct sighand_struct *sig;
++
++	sig = kmem_cache_alloc(sighand_cachep, GFP_KERNEL);
++	rcu_assign_pointer(child->sighand, sig);
++	if (!sig)
++		return -ENOMEM;
++	atomic_set(&sig->count, 1);
++	memcpy(sig->action, current->sighand->action, sizeof(sig->action));
++	return 0;
++}
++
++static inline int create_mm(struct task_struct *parent, struct task_struct *child)
++{
++	struct mm_struct *mm;
++
++	mm = allocate_mm();
++	if (!mm)
++		return -ENOMEM;
++
++	/* Copy the current MM stuff.. */
++	memset(mm, 0, sizeof(*mm));
++	if (!mm_init(mm, parent, mm->user_ns))
++		return -ENOMEM;
++
++	init_new_context_from_task(parent, child, mm);
++
++	if (!mm->get_unmapped_area)
++		mm->get_unmapped_area = parent->mm->get_unmapped_area;
++
++	child->mm = mm;
++	child->active_mm = mm;
++
++	return 0;
++}
++
++static inline int dup_signal(struct task_struct *parent, struct task_struct *child)
++{
++	struct signal_struct *sig;
++
++	sig = kmem_cache_zalloc(signal_cachep, GFP_KERNEL);
++	child->signal = sig;
++	if (!sig)
++		return -ENOMEM;
++
++	sig->nr_threads = 1;
++	atomic_set(&sig->live, 1);
++	atomic_set(&sig->sigcnt, 1);
++
++	/* list_add(thread_node, thread_head) without INIT_LIST_HEAD() */
++	sig->thread_head = (struct list_head)LIST_HEAD_INIT(parent->thread_node);
++	parent->thread_node = (struct list_head)LIST_HEAD_INIT(sig->thread_head);
++
++	init_waitqueue_head(&sig->wait_chldexit);
++	sig->curr_target = child;
++	init_sigpending(&sig->shared_pending);
++	INIT_LIST_HEAD(&sig->posix_timers);
++	seqlock_init(&sig->stats_lock);
++	prev_cputime_init(&sig->prev_cputime);
++
++	hrtimer_init(&sig->real_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++	sig->real_timer.function = it_real_fn;
++
++	task_lock(parent->group_leader);
++	memcpy(sig->rlim, parent->signal->rlim, sizeof sig->rlim);
++	task_unlock(parent->group_leader);
++
++	posix_cpu_timers_init_group(sig);
++
++	tty_audit_fork(sig);
++	sched_autogroup_fork(sig);
++
++
++	sig->oom_score_adj = parent->signal->oom_score_adj;
++	sig->oom_score_adj_min = parent->signal->oom_score_adj_min;
++
++	sig->has_child_subreaper = parent->signal->has_child_subreaper ||
++	parent->signal->is_child_subreaper;
++
++	mutex_init(&sig->cred_guard_mutex);
++
++#ifdef CONFIG_AUDIT
++	/* tty_audit_fork */
++	spin_lock_irq(&parent->sighand->siglock);
++	sig->audit_tty = parent->signal->audit_tty;
++	spin_unlock_irq(&parent->sighand->siglock);
++	sig->tty_audit_buf = NULL;
++#endif
++
++	return 0;
++}
++
++static inline int dup_fs(struct task_struct *parent, struct task_struct *child)
++{
++	child->fs = copy_fs_struct(parent->fs);
++	return child->fs ? 0 : -ENOMEM;
++}
++
++static struct task_struct *copy_process_from_task(struct task_struct *ptsk,
++		unsigned long process_flags,
++		unsigned long clone_flags,
++		unsigned long stack_start,
++		struct pt_regs *regs,
++		unsigned long stack_size,
++		int __user *child_tidptr,
++		struct pid *pid,
++		int trace,
++		unsigned long tls,
++		int node)
++{
++	int retval;
++	struct task_struct *p;
++	void *cgrp_ss_priv[CGROUP_CANFORK_COUNT] = {};
++
++	retval = security_task_create(clone_flags);
++	if (retval)
++		goto fork_out;
++
++	retval = -ENOMEM;
++	p = dup_task_struct(ptsk, node);
++	if (!p)
++		goto fork_out;
++
++	ftrace_graph_init_task(p);
++
++	rt_mutex_init_task(p);
++
++#ifdef CONFIG_PROVE_LOCKING
++	DEBUG_LOCKS_WARN_ON(!p->hardirqs_enabled);
++	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
++#endif
++	retval = -EAGAIN;
++	if (atomic_read(&p->real_cred->user->processes) >=
++			task_rlimit(p, RLIMIT_NPROC)) {
++		if (p->real_cred->user != INIT_USER &&
++		    !capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE))
++			goto bad_fork_free;
++	}
++	ptsk->flags &= ~PF_NPROC_EXCEEDED;
++
++	retval = copy_creds(p, clone_flags);
++	if (retval < 0)
++		goto bad_fork_free;
++
++	/*
++	 * If multiple threads are within copy_process(), then this check
++	 * triggers too late. This doesn't hurt, the check is only there
++	 * to stop root fork bombs.
++	 */
++	retval = -EAGAIN;
++	if (nr_threads >= max_threads)
++		goto bad_fork_cleanup_count;
++
++	delayacct_tsk_init(p);	/* Must remain after dup_task_struct() */
++	p->flags &= ~(PF_SUPERPRIV | PF_WQ_WORKER);
++	p->flags |= PF_FORKNOEXEC;
++	INIT_LIST_HEAD(&p->children);
++	INIT_LIST_HEAD(&p->sibling);
++	rcu_copy_process(p);
++	p->vfork_done = NULL;
++	rwlock_init(&p->alloc_lock);
++
++	init_sigpending(&p->pending);
++
++	p->utime = p->stime = p->gtime = 0;
++	p->utimescaled = p->stimescaled = 0;
++	prev_cputime_init(&p->prev_cputime);
++
++#ifdef CONFIG_VIRT_CPU_ACCOUNTING_GEN
++	seqlock_init(&p->vtime_seqlock);
++	p->vtime_snap = 0;
++	p->vtime_snap_whence = VTIME_SLEEPING;
++#endif
++
++#if defined(SPLIT_RSS_COUNTING)
++	memset(&p->rss_stat, 0, sizeof(p->rss_stat));
++#endif
++
++	p->default_timer_slack_ns = ptsk->timer_slack_ns;
++
++	task_io_accounting_init(&p->ioac);
++	acct_clear_integrals(p);
++
++	posix_cpu_timers_init(p);
++
++	p->start_time = ktime_get_ns();
++	p->real_start_time = ktime_get_boot_ns();
++	p->io_context = NULL;
++	p->audit_context = NULL;
++	cgroup_fork(p);
++#ifdef CONFIG_NUMA
++	p->mempolicy = mpol_dup(p->mempolicy);
++ 	if (IS_ERR(p->mempolicy)) {
++ 		retval = PTR_ERR(p->mempolicy);
++ 		p->mempolicy = NULL;
++		goto bad_fork_cleanup_threadgroup_lock;
++ 	}
++#endif
++#ifdef CONFIG_CPUSETS
++	p->cpuset_mem_spread_rotor = NUMA_NO_NODE;
++	p->cpuset_slab_spread_rotor = NUMA_NO_NODE;
++	seqcount_init(&p->mems_allowed_seq);
++#endif
++#ifdef CONFIG_TRACE_IRQFLAGS
++	p->irq_events = 0;
++	p->hardirqs_enabled = 0;
++	p->hardirq_enable_ip = 0;
++	p->hardirq_enable_event = 0;
++	p->hardirq_disable_ip = _THIS_IP_;
++	p->hardirq_disable_event = 0;
++	p->softirqs_enabled = 1;
++	p->softirq_enable_ip = _THIS_IP_;
++	p->softirq_enable_event = 0;
++	p->softirq_disable_ip = 0;
++	p->softirq_disable_event = 0;
++	p->hardirq_context = 0;
++	p->softirq_context = 0;
++#endif
++
++	p->pagefault_disabled = 0;
++
++#ifdef CONFIG_LOCKDEP
++	p->lockdep_depth = 0; /* no locks held yet */
++	p->curr_chain_key = 0;
++	p->lockdep_recursion = 0;
++#endif
++
++#ifdef CONFIG_DEBUG_MUTEXES
++	p->blocked_on = NULL; /* not blocked yet */
++#endif
++#ifdef CONFIG_BCACHE
++	p->sequential_io	= 0;
++	p->sequential_io_avg	= 0;
++#endif
++
++	/* Perform scheduler related setup. Assign this task to a CPU. */
++	retval = sched_fork(clone_flags, p);
++	if (retval)
++		goto bad_fork_cleanup_policy;
++
++	retval = perf_event_init_task(p);
++	if (retval)
++		goto bad_fork_cleanup_policy;
++	retval = audit_alloc(p);
++	if (retval)
++		goto bad_fork_cleanup_perf;
++	/* copy all the process information */
++	shm_init_task(p);
++	retval = copy_semundo(clone_flags, p);
++	if (retval)
++		goto bad_fork_cleanup_audit;
++    if (process_flags & CREATE_PROCESS) {
++        retval = dup_files(p);
++        if (retval)
++            goto bad_fork_cleanup_semundo;
++        retval = dup_fs(ptsk, p);
++        if (retval)
++            goto bad_fork_cleanup_files;
++        retval = dup_sighand(ptsk, p);
++        if (retval)
++            goto bad_fork_cleanup_fs;
++        retval = dup_signal(ptsk, p);
++        if (retval)
++            goto bad_fork_cleanup_sighand;
++        retval = create_mm(ptsk, p);
++        if (retval)
++            goto bad_fork_cleanup_signal;
++    }
++    else {
++		clone_files(ptsk);
++		clone_fs(ptsk);
++		clone_sighand(ptsk);
++		clone_signal(ptsk);
++		clone_mm(ptsk, p);
++    }
++	retval = copy_namespaces(clone_flags, p);
++	if (retval)
++		goto bad_fork_cleanup_mm;
++	retval = copy_io(clone_flags, p);
++	if (retval)
++		goto bad_fork_cleanup_namespaces;
++	retval = copy_thread_tls(clone_flags, stack_start, stack_size, p, tls);
++	if (retval)
++		goto bad_fork_cleanup_io;
++
++	/* p->thread.io_bitmap_ptr is copied from current->thread.io_bitmap_ptr */
++	if (ptsk != current) {
++		if (ptsk->thread.io_bitmap_ptr) {
++			if (!current->thread.io_bitmap_ptr) {
++				/* p->thread.io_bitmap_ptr is shared with ptsk */
++				p->thread.io_bitmap_ptr = kmalloc(IO_BITMAP_BYTES, GFP_KERNEL);
++				if (!p->thread.io_bitmap_ptr) {
++					p->thread.io_bitmap_max = 0;
++					goto bad_fork_cleanup_namespaces;
++				}
++			}
++			memcpy(p->thread.io_bitmap_ptr, ptsk->thread.io_bitmap_ptr, IO_BITMAP_BYTES);
++		}
++		else {
++			if (current->thread.io_bitmap_ptr) {
++				kfree(p->thread.io_bitmap_ptr);
++				p->thread.io_bitmap_ptr = NULL;
++			}
++		}
++	}
++
++	if (pid != &init_struct_pid) {
++		pid = alloc_pid(p->nsproxy->pid_ns_for_children);
++		if (IS_ERR(pid)) {
++			retval = PTR_ERR(pid);
++			goto bad_fork_cleanup_io;
++		}
++	}
++
++	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? child_tidptr : NULL;
++	/*
++	 * Clear TID on mm_release()?
++	 */
++	p->clear_child_tid = (clone_flags & CLONE_CHILD_CLEARTID) ? child_tidptr : NULL;
++#ifdef CONFIG_BLOCK
++	p->plug = NULL;
++#endif
++#ifdef CONFIG_FUTEX
++	p->robust_list = NULL;
++#ifdef CONFIG_COMPAT
++	p->compat_robust_list = NULL;
++#endif
++	INIT_LIST_HEAD(&p->pi_state_list);
++	p->pi_state_cache = NULL;
++#endif
++	/*
++	 * sigaltstack should be cleared when sharing the same VM
++	 */
++	if ((clone_flags & (CLONE_VM|CLONE_VFORK)) == CLONE_VM)
++		p->sas_ss_sp = p->sas_ss_size = 0;
++
++#ifdef CONFIG_UNIFIED_KERNEL
++	p->ethread= NULL;
++    if(current->ethread)
++        tet_ops->ethread_notify_fork(current, p, clone_flags);
++#endif
++
++	/*
++	 * Syscall tracing and stepping should be turned off in the
++	 * child regardless of CLONE_PTRACE.
++	 */
++	user_disable_single_step(p);
++	clear_tsk_thread_flag(p, TIF_SYSCALL_TRACE);
++#ifdef TIF_SYSCALL_EMU
++	clear_tsk_thread_flag(p, TIF_SYSCALL_EMU);
++#endif
++	clear_all_latency_tracing(p);
++
++	/* ok, now we should be set up.. */
++	p->pid = pid_nr(pid);
++	if (clone_flags & CLONE_THREAD) {
++		p->exit_signal = -1;
++		p->group_leader = current->group_leader;
++		p->tgid = current->tgid;
++	} else {
++		if (clone_flags & CLONE_PARENT)
++			p->exit_signal = current->group_leader->exit_signal;
++		else
++			p->exit_signal = (clone_flags & CSIGNAL);
++		p->group_leader = p;
++		p->tgid = p->pid;
++	}
++
++	p->nr_dirtied = 0;
++	p->nr_dirtied_pause = 128 >> (PAGE_SHIFT - 10);
++	p->dirty_paused_when = 0;
++
++	p->pdeath_signal = 0;
++	INIT_LIST_HEAD(&p->thread_group);
++	p->task_works = NULL;
++
++	threadgroup_change_begin(current);
++	/*
++	 * Ensure that the cgroup subsystem policies allow the new process to be
++	 * forked. It should be noted the the new process's css_set can be changed
++	 * between here and cgroup_post_fork() if an organisation operation is in
++	 * progress.
++	 */
++	retval = cgroup_can_fork(p, cgrp_ss_priv);
++	if (retval)
++		goto bad_fork_free_pid;
++
++	/*
++	 * Make it visible to the rest of the system, but dont wake it up yet.
++	 * Need tasklist lock for parent etc handling!
++	 */
++	write_lock_irq(&tasklist_lock);
++
++	/* CLONE_PARENT re-uses the old parent */
++	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
++		p->real_parent = current->real_parent;
++		p->parent_exec_id = current->parent_exec_id;
++	} else {
++		p->real_parent = current;
++		p->parent_exec_id = current->self_exec_id;
++	}
++
++	spin_lock(&current->sighand->siglock);
++
++	/*
++	 * Copy seccomp details explicitly here, in case they were changed
++	 * before holding sighand lock.
++	 */
++	copy_seccomp(p);
++
++	/*
++	 * Process group and session signals need to be delivered to just the
++	 * parent before the fork or both the parent and the child after the
++	 * fork. Restart if a signal comes in before we add the new process to
++	 * it's process group.
++	 * A fatal signal pending means that current will exit, so the new
++	 * thread can't slip out of an OOM kill (or normal SIGKILL).
++	*/
++	recalc_sigpending();
++	if (signal_pending(ptsk)) {
++		retval = -ERESTARTNOINTR;
++		goto bad_fork_cancel_cgroup;
++	}
++	if (unlikely(!(ns_of_pid(pid)->nr_hashed & PIDNS_HASH_ADDING))) {
++		retval = -ENOMEM;
++		goto bad_fork_cancel_cgroup;
++	}
++
++	if (likely(p->pid)) {
++		ptrace_init_task(p, (clone_flags & CLONE_PTRACE) || trace);
++
++		init_task_pid(p, PIDTYPE_PID, pid);
++		if (thread_group_leader(p)) {
++			init_task_pid(p, PIDTYPE_PGID, task_pgrp(current));
++			init_task_pid(p, PIDTYPE_SID, task_session(current));
++
++			if (is_child_reaper(pid)) {
++				ns_of_pid(pid)->child_reaper = p;
++				p->signal->flags |= SIGNAL_UNKILLABLE;
++			}
++
++			p->signal->leader_pid = pid;
++			p->signal->tty = tty_kref_get(ptsk->signal->tty);
++			list_add_tail(&p->sibling, &p->real_parent->children);
++			list_add_tail_rcu(&p->tasks, &init_task.tasks);
++			attach_pid(p, PIDTYPE_PGID);
++			attach_pid(p, PIDTYPE_SID);
++			__this_cpu_inc(process_counts);
++		} else {
++			ptsk->signal->nr_threads++;
++			atomic_inc(&ptsk->signal->live);
++			atomic_inc(&ptsk->signal->sigcnt);
++			list_add_tail_rcu(&p->thread_group,
++					  &p->group_leader->thread_group);
++			list_add_tail_rcu(&p->thread_node,
++					  &p->signal->thread_head);
++		}
++		attach_pid(p, PIDTYPE_PID);
++		nr_threads++;
++	}
++
++	total_forks++;
++	spin_unlock(&current->sighand->siglock);
++	syscall_tracepoint_update(p);
++	write_unlock_irq(&tasklist_lock);
++
++	proc_fork_connector(p);
++	cgroup_post_fork(p, cgrp_ss_priv);
++	threadgroup_change_end(current);
++	perf_event_fork(p);
++
++	trace_task_newtask(p, clone_flags);
++	uprobe_copy_process(p, clone_flags);
++
++	return p;
++
++bad_fork_cancel_cgroup:
++	spin_unlock(&ptsk->sighand->siglock);
++	write_unlock_irq(&tasklist_lock);
++	cgroup_cancel_fork(p, cgrp_ss_priv);
++bad_fork_free_pid:
++	threadgroup_change_end(current);
++	if (pid != &init_struct_pid)
++		free_pid(pid);
++bad_fork_cleanup_io:
++	if (p->io_context)
++		exit_io_context(p);
++bad_fork_cleanup_namespaces:
++	exit_task_namespaces(p);
++bad_fork_cleanup_mm:
++	if (p->mm)
++		mmput(p->mm);
++bad_fork_cleanup_signal:
++	if (!(clone_flags & CLONE_THREAD))
++		free_signal_struct(p->signal);
++bad_fork_cleanup_sighand:
++	__cleanup_sighand(p->sighand);
++bad_fork_cleanup_fs:
++	exit_fs(p); /* blocking */
++bad_fork_cleanup_files:
++	exit_files(p); /* blocking */
++bad_fork_cleanup_semundo:
++	exit_sem(p);
++bad_fork_cleanup_audit:
++	audit_free(p);
++bad_fork_cleanup_perf:
++	perf_event_free_task(p);
++bad_fork_cleanup_policy:
++#ifdef CONFIG_NUMA
++	mpol_put(p->mempolicy);
++bad_fork_cleanup_threadgroup_lock:
++#endif
++	delayacct_tsk_free(p);
++bad_fork_cleanup_count:
++	atomic_dec(&p->cred->user->processes);
++	exit_creds(p);
++bad_fork_free:
++	free_task(p);
++fork_out:
++	return ERR_PTR(retval);
++}
++
++long do_fork_from_task(struct task_struct *ptsk,
++		unsigned long process_flags,
++		unsigned long clone_flags,
++		unsigned long stack_start,
++		struct pt_regs *regs,
++		unsigned long stack_size,
++		int __user *parent_tidptr,
++		int __user *child_tidptr,
++		unsigned long tls)
++{
++	struct task_struct *p;
++	int trace = 0;
++	long nr;
++
++	/*
++	 * Determine whether and which event to report to ptracer.  When
++	 * called from kernel_thread or CLONE_UNTRACED is explicitly
++	 * requested, no event is reported; otherwise, report if the event
++	 * for the type of forking is enabled.
++	 */
++	if (!(clone_flags & CLONE_UNTRACED)) {
++		if (clone_flags & CLONE_VFORK)
++			trace = PTRACE_EVENT_VFORK;
++		else if ((clone_flags & CSIGNAL) != SIGCHLD)
++			trace = PTRACE_EVENT_CLONE;
++		else
++			trace = PTRACE_EVENT_FORK;
++
++		if (likely(!ptrace_event_enabled(current, trace)))
++			trace = 0;
++	}
++
++	p = copy_process_from_task(ptsk, process_flags, clone_flags, stack_start, regs, stack_size,
++			 child_tidptr, NULL, trace, tls, NUMA_NO_NODE);
++	/*
++	 * Do this prior waking up the new thread - the thread pointer
++	 * might get invalid after that point, if the thread exits quickly.
++	 */
++	if (!IS_ERR(p)) {
++		struct completion vfork;
++		struct pid *pid;
++
++		trace_sched_process_fork(ptsk, p);
++
++		pid = get_task_pid(p, PIDTYPE_PID);
++		nr = pid_vnr(pid);
++
++		if (clone_flags & CLONE_PARENT_SETTID)
++			put_user(nr, parent_tidptr);
++
++		if (clone_flags & CLONE_VFORK) {
++			p->vfork_done = &vfork;
++			init_completion(&vfork);
++			get_task_struct(p);
++		}
++
++		wake_up_new_task(p);
++
++		/* forking complete and child started to run, tell ptracer */
++		if (unlikely(trace))
++			ptrace_event_pid(trace, pid);
++
++		if (clone_flags & CLONE_VFORK) {
++			if (!wait_for_vfork_done(p, &vfork))
++				ptrace_event_pid(PTRACE_EVENT_VFORK_DONE, pid);
++		}
++
++		put_pid(pid);
++	} else {
++		nr = PTR_ERR(p);
++	}
++	return nr;
++}
++EXPORT_SYMBOL(do_fork_from_task);
++#endif
+diff --git a/kernel/pid.c b/kernel/pid.c
+index 5fe7cdb..74354c7 100644
+--- a/kernel/pid.c
++++ b/kernel/pid.c
+@@ -393,6 +393,9 @@ void attach_pid(struct task_struct *task, enum pid_type type)
+ 	struct pid_link *link = &task->pids[type];
+ 	hlist_add_head_rcu(&link->node, &link->pid->tasks[type]);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(find_task_by_vpid);
++#endif
+ 
+ static void __change_pid(struct task_struct *task, enum pid_type type,
+ 			struct pid *new)
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 65ed350..19e1a6f 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -2288,6 +2288,9 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
+ 	put_cpu();
+ 	return 0;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sched_fork);
++#endif
+ 
+ unsigned long to_ratio(u64 period, u64 runtime)
+ {
+@@ -2430,6 +2433,9 @@ void wake_up_new_task(struct task_struct *p)
+ #endif
+ 	task_rq_unlock(rq, p, &flags);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(wake_up_new_task);
++#endif
+ 
+ #ifdef CONFIG_PREEMPT_NOTIFIERS
+ 
+@@ -2684,6 +2690,9 @@ asmlinkage __visible void schedule_tail(struct task_struct *prev)
+ 	if (current->set_child_tid)
+ 		put_user(task_pid_vnr(current), current->set_child_tid);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(schedule_tail);
++#endif
+ 
+ /*
+  * context_switch - switch to the new MM and the new thread's register state.
+diff --git a/kernel/signal.c b/kernel/signal.c
+index 4a548c6..c83572c 100644
+--- a/kernel/signal.c
++++ b/kernel/signal.c
+@@ -45,6 +45,11 @@
+ #include <asm/cacheflush.h>
+ #include "audit.h"	/* audit_signal_info() */
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/win32_thread.h>
++
++extern struct task_ethread_operations* tet_ops;
++#endif
+ /*
+  * SLAB caches for signal bits.
+  */
+@@ -131,7 +136,11 @@ static inline int has_pending_signals(sigset_t *signal, sigset_t *blocked)
+ 
+ #define PENDING(p,b) has_pending_signals(&(p)->signal, (b))
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++int recalc_sigpending_tsk(struct task_struct *t)
++#else
+ static int recalc_sigpending_tsk(struct task_struct *t)
++#endif
+ {
+ 	if ((t->jobctl & JOBCTL_PENDING_MASK) ||
+ 	    PENDING(&t->pending, &t->blocked) ||
+@@ -602,6 +611,11 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
+ 		}
+ 	}
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++    if(current->ethread)
++        tet_ops->ethread_notify_signal(current, signr);
++#endif
++
+ 	recalc_sigpending();
+ 	if (!signr)
+ 		return 0;
+@@ -1772,6 +1786,9 @@ static int sigkill_pending(struct task_struct *tsk)
+ 	return	sigismember(&tsk->pending.signal, SIGKILL) ||
+ 		sigismember(&tsk->signal->shared_pending.signal, SIGKILL);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(ptrace_notify);
++#endif
+ 
+ /*
+  * This must be called with current->sighand->siglock held.
+@@ -2314,6 +2331,11 @@ relock:
+ 		/*
+ 		 * Death signals, no core dump.
+ 		 */
++#ifdef CONFIG_UNIFIED_KERNEL
++        if(current->ethread && !(current->signal->flags & SIGNAL_GROUP_EXIT))
++            do_exit((current->exit_state & 0xff) << 8);
++        else
++#endif
+ 		do_group_exit(ksig->info.si_signo);
+ 		/* NOTREACHED */
+ 	}
+@@ -2866,6 +2888,9 @@ SYSCALL_DEFINE2(kill, pid_t, pid, int, sig)
+ 
+ 	return kill_something_info(sig, &info, pid);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_kill);
++#endif
+ 
+ static int
+ do_send_specific(pid_t tgid, pid_t pid, int sig, struct siginfo *info)
+diff --git a/mm/mmap.c b/mm/mmap.c
+index cc84b97..93c7030 100644
+--- a/mm/mmap.c
++++ b/mm/mmap.c
+@@ -58,6 +58,19 @@
+ #define arch_rebalance_pgtables(addr, len)		(addr)
+ #endif
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++
++#define MAP_RESERVE     0x10000000
++#define MAP_TOP_DOWN    0x20000000
++
++#define MMAP_TOP_DOWN_BASE	0x7fff0000
++
++#define RESERVE_PAGE_SIZE	(16 * PAGE_SIZE)
++#define RESERVE_PAGE_SHIFT	(PAGE_SHIFT + 4)
++#define RESERVE_PAGE_MASK	(~(RESERVE_PAGE_SIZE - 1))
++
++#endif
++
+ static void unmap_region(struct mm_struct *mm,
+ 		struct vm_area_struct *vma, struct vm_area_struct *prev,
+ 		unsigned long start, unsigned long end);
+@@ -1939,6 +1952,9 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+ 	struct mm_struct *mm = current->mm;
+ 	struct vm_area_struct *vma, *prev;
+ 	struct vm_unmapped_area_info info;
++#ifdef CONFIG_UNIFIED_KERNEL
++    unsigned long reserved_len = (len + RESERVE_PAGE_SIZE - 1) & RESERVE_PAGE_MASK;
++#endif
+ 
+ 	if (len > TASK_SIZE - mmap_min_addr)
+ 		return -ENOMEM;
+@@ -1946,12 +1962,30 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
+ 	if (flags & MAP_FIXED)
+ 		return addr;
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++	if (current->ethread && (flags & MAP_TOP_DOWN)) {
++		unsigned long old_mmap_base = mm->mmap_base;
++
++		mm->mmap_base = MMAP_TOP_DOWN_BASE;
++		addr = arch_get_unmapped_area_topdown(filp, addr, len, pgoff, flags);
++		mm->mmap_base = old_mmap_base;
++		return addr;
++	}
++#endif
++
+ 	if (addr) {
+ 		addr = PAGE_ALIGN(addr);
+ 		vma = find_vma_prev(mm, addr, &prev);
+ 		if (TASK_SIZE - len >= addr && addr >= mmap_min_addr &&
+ 		    (!vma || addr + len <= vm_start_gap(vma)) &&
+ 		    (!prev || addr >= vm_end_gap(prev)))
++#ifdef CONFIG_UNIFIED_KERNEL
++			if (current->ethread && (flags & MAP_RESERVE)) {
++				addr = ((addr + RESERVE_PAGE_SIZE - 1) & RESERVE_PAGE_MASK);
++				if (addr + reserved_len > vma->vm_start)
++					addr = vma->vm_end;
++			}
++#endif
+ 			return addr;
+ 	}
+ 
+diff --git a/mm/mprotect.c b/mm/mprotect.c
+index c0b4b2a..b9c2410 100644
+--- a/mm/mprotect.c
++++ b/mm/mprotect.c
+@@ -28,6 +28,9 @@
+ #include <asm/pgtable.h>
+ #include <asm/cacheflush.h>
+ #include <asm/tlbflush.h>
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/module.h>
++#endif
+ 
+ #include "internal.h"
+ 
+@@ -444,3 +447,6 @@ out:
+ 	up_write(&current->mm->mmap_sem);
+ 	return error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_mprotect);
++#endif
+diff --git a/mm/msync.c b/mm/msync.c
+index 24e612f..78f8d83 100644
+--- a/mm/msync.c
++++ b/mm/msync.c
+@@ -14,6 +14,10 @@
+ #include <linux/syscalls.h>
+ #include <linux/sched.h>
+ 
++#ifdef CONFIG_UNIFIED_KERNEL
++#include <linux/module.h>
++#endif
++
+ /*
+  * MS_SYNC syncs the entire file - including mappings.
+  *
+@@ -105,3 +109,6 @@ out_unlock:
+ out:
+ 	return error ? : unmapped_error;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_msync);
++#endif
+diff --git a/net/socket.c b/net/socket.c
+index 5b31e5b..496f78e 100644
+--- a/net/socket.c
++++ b/net/socket.c
+@@ -1246,6 +1246,9 @@ out_release:
+ 	sock_release(sock);
+ 	return retval;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_socket);
++#endif
+ 
+ /*
+  *	Create a pair of connected sockets.
+@@ -1351,6 +1354,9 @@ out_release_1:
+ out:
+ 	return err;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_socketpair);
++#endif
+ 
+ /*
+  *	Bind a name to a socket. Nothing much to do here since it's
+@@ -1508,6 +1514,9 @@ SYSCALL_DEFINE3(accept, int, fd, struct sockaddr __user *, upeer_sockaddr,
+ {
+ 	return sys_accept4(fd, upeer_sockaddr, upeer_addrlen, 0);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_accept);
++#endif
+ 
+ /*
+  *	Attempt to connect to a socket with the server address.  The address
+@@ -1713,6 +1722,9 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
+ out:
+ 	return err;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_recvfrom);
++#endif
+ 
+ /*
+  *	Receive a datagram from a socket.
+@@ -1757,6 +1769,9 @@ out_put:
+ 	}
+ 	return err;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_setsockopt);
++#endif
+ 
+ /*
+  *	Get a socket option. Because we don't know the option lengths we have
+@@ -1788,6 +1803,9 @@ out_put:
+ 	}
+ 	return err;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_getsockopt);
++#endif
+ 
+ /*
+  *	Shutdown a socket.
+@@ -1807,6 +1825,9 @@ SYSCALL_DEFINE2(shutdown, int, fd, int, how)
+ 	}
+ 	return err;
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(sys_shutdown);
++#endif
+ 
+ /* A couple of helpful macros for getting the address of the 32/64 bit
+  * fields which are the same type (int / unsigned) on our platforms.
+diff --git a/security/security.c b/security/security.c
+index 46f405c..8e14477 100644
+--- a/security/security.c
++++ b/security/security.c
+@@ -270,6 +270,9 @@ int security_sb_alloc(struct super_block *sb)
+ {
+ 	return call_int_hook(sb_alloc_security, 0, sb);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(security_bprm_secureexec);
++#endif
+ 
+ void security_sb_free(struct super_block *sb)
+ {
+@@ -704,6 +707,9 @@ int security_inode_getsecurity(const struct inode *inode, const char *name, void
+ 	return call_int_hook(inode_getsecurity, -EOPNOTSUPP, inode, name,
+ 				buffer, alloc);
+ }
++#ifdef CONFIG_UNIFIED_KERNEL
++EXPORT_SYMBOL(security_file_lock);
++#endif
+ 
+ int security_inode_setsecurity(struct inode *inode, const char *name, const void *value, size_t size, int flags)
+ {

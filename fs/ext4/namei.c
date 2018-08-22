@@ -38,6 +38,9 @@
 
 #include "xattr.h"
 #include "acl.h"
+#ifdef CONFIG_UNIFIED_KERNEL
+#include <linux/ctype.h>
+#endif
 
 #include <trace/events/ext4.h>
 /*
@@ -1255,6 +1258,15 @@ static inline int ext4_match(struct ext4_filename *fname,
 #endif
 	if (de->name_len != len)
 		return 0;
+#ifdef CONFIG_UNIFIED_KERNEL
+    if(current->ethread) {
+        int i;
+        for(i = 0; i < len; i++)
+            if(tolower(((char *)name)[i]) != tolower(((char *)de->name)[i]))
+                return 0;
+        return 1;
+    }
+#endif
 	return (memcmp(de->name, name, len) == 0) ? 1 : 0;
 }
 

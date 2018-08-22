@@ -226,6 +226,9 @@ SYSCALL_DEFINE1(fsync, unsigned int, fd)
 {
 	return do_fsync(fd, 0);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_fsync);
+#endif
 
 SYSCALL_DEFINE1(fdatasync, unsigned int, fd)
 {

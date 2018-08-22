@@ -54,6 +54,10 @@
 #include <asm/traps.h>
 #include <asm/vm86.h>
 
+#ifdef CONFIG_UNIFIED_KERNEL
+#include <linux/module.h>
+#endif
+
 /*
  * Known problems:
  *
@@ -157,6 +161,9 @@ void save_v86_state(struct kernel_vm86_regs *regs, int retval)
 
 	regs->pt.ax = retval;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(save_v86_state);
+#endif
 
 static void mark_screen_rdonly(struct mm_struct *mm)
 {

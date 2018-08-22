@@ -270,6 +270,9 @@ int security_sb_alloc(struct super_block *sb)
 {
 	return call_int_hook(sb_alloc_security, 0, sb);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(security_bprm_secureexec);
+#endif
 
 void security_sb_free(struct super_block *sb)
 {
@@ -704,6 +707,9 @@ int security_inode_getsecurity(const struct inode *inode, const char *name, void
 	return call_int_hook(inode_getsecurity, -EOPNOTSUPP, inode, name,
 				buffer, alloc);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(security_file_lock);
+#endif
 
 int security_inode_setsecurity(struct inode *inode, const char *name, const void *value, size_t size, int flags)
 {

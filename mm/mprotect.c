@@ -28,6 +28,9 @@
 #include <asm/pgtable.h>
 #include <asm/cacheflush.h>
 #include <asm/tlbflush.h>
+#ifdef CONFIG_UNIFIED_KERNEL
+#include <linux/module.h>
+#endif
 
 #include "internal.h"
 
@@ -444,3 +447,6 @@ out:
 	up_write(&current->mm->mmap_sem);
 	return error;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_mprotect);
+#endif

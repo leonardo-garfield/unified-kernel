@@ -265,6 +265,9 @@ static void exit_to_usermode_loop(struct pt_regs *regs, u32 cached_flags)
 
 	}
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(exit_to_usermode_loop);
+#endif
 
 /* Called with IRQs disabled. */
 __visible inline void prepare_exit_to_usermode(struct pt_regs *regs)
@@ -321,6 +324,9 @@ static void syscall_slow_exit_work(struct pt_regs *regs, u32 cached_flags)
 	if (step || cached_flags & _TIF_SYSCALL_TRACE)
 		tracehook_report_syscall_exit(regs, step);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(syscall_slow_exit_work);
+#endif
 
 /*
  * Called with IRQs on and fully valid regs.  Returns with IRQs off in a

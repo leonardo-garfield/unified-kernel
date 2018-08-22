@@ -131,6 +131,9 @@ void f_delown(struct file *filp)
 {
 	f_modown(filp, NULL, PIDTYPE_PID, 1);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_dup2);
+#endif
 
 pid_t f_getown(struct file *filp)
 {
@@ -142,6 +145,9 @@ pid_t f_getown(struct file *filp)
 	read_unlock(&filp->f_owner.lock);
 	return pid;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_dup);
+#endif
 
 static int f_setown_ex(struct file *filp, unsigned long arg)
 {
@@ -379,6 +385,9 @@ out1:
 out:
 	return err;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_fcntl);
+#endif
 
 #if BITS_PER_LONG == 32
 SYSCALL_DEFINE3(fcntl64, unsigned int, fd, unsigned int, cmd,

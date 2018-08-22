@@ -45,6 +45,11 @@
 #include <asm/cacheflush.h>
 #include "audit.h"	/* audit_signal_info() */
 
+#ifdef CONFIG_UNIFIED_KERNEL
+#include <linux/win32_thread.h>
+
+extern struct task_ethread_operations* tet_ops;
+#endif
 /*
  * SLAB caches for signal bits.
  */
@@ -131,7 +136,11 @@ static inline int has_pending_signals(sigset_t *signal, sigset_t *blocked)
 
 #define PENDING(p,b) has_pending_signals(&(p)->signal, (b))
 
+#ifdef CONFIG_UNIFIED_KERNEL
+int recalc_sigpending_tsk(struct task_struct *t)
+#else
 static int recalc_sigpending_tsk(struct task_struct *t)
+#endif
 {
 	if ((t->jobctl & JOBCTL_PENDING_MASK) ||
 	    PENDING(&t->pending, &t->blocked) ||
@@ -601,6 +610,11 @@ int dequeue_signal(struct task_struct *tsk, sigset_t *mask, siginfo_t *info)
 			}
 		}
 	}
+
+#ifdef CONFIG_UNIFIED_KERNEL
+    if(current->ethread)
+        tet_ops->ethread_notify_signal(current, signr);
+#endif
 
 	recalc_sigpending();
 	if (!signr)
@@ -1772,6 +1786,9 @@ static int sigkill_pending(struct task_struct *tsk)
 	return	sigismember(&tsk->pending.signal, SIGKILL) ||
 		sigismember(&tsk->signal->shared_pending.signal, SIGKILL);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(ptrace_notify);
+#endif
 
 /*
  * This must be called with current->sighand->siglock held.
@@ -2314,6 +2331,11 @@ relock:
 		/*
 		 * Death signals, no core dump.
 		 */
+#ifdef CONFIG_UNIFIED_KERNEL
+        if(current->ethread && !(current->signal->flags & SIGNAL_GROUP_EXIT))
+            do_exit((current->exit_state & 0xff) << 8);
+        else
+#endif
 		do_group_exit(ksig->info.si_signo);
 		/* NOTREACHED */
 	}
@@ -2866,6 +2888,9 @@ SYSCALL_DEFINE2(kill, pid_t, pid, int, sig)
 
 	return kill_something_info(sig, &info, pid);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_kill);
+#endif
 
 static int
 do_send_specific(pid_t tgid, pid_t pid, int sig, struct siginfo *info)

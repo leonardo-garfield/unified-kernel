@@ -120,6 +120,37 @@ void exit_thread(void)
 	fpu__drop(fpu);
 }
 
+#ifdef CONFIG_UNIFIED_KERNEL
+/*
+ *  Free thread data structures etc..
+ */
+void exit_thread_for_task(struct task_struct *tsk)
+{
+	struct thread_struct *t = &tsk->thread;
+	unsigned long *bp = t->io_bitmap_ptr;
+	struct fpu *fpu = &t->fpu;
+
+	if (bp) {
+		struct tss_struct *tss = &per_cpu(cpu_tss, get_cpu());
+
+		t->io_bitmap_ptr = NULL;
+		clear_thread_flag(TIF_IO_BITMAP);
+		/*
+		 * Careful, clear this in the TSS too:
+		 */
+		memset(tss->io_bitmap, 0xff, t->io_bitmap_max);
+		t->io_bitmap_max = 0;
+		put_cpu();
+		kfree(bp);
+	}
+
+	free_vm86(t);
+
+	fpu__drop(fpu);
+
+}
+#endif
+
 void flush_thread(void)
 {
 	struct task_struct *tsk = current;
@@ -502,6 +533,9 @@ unsigned long arch_align_stack(unsigned long sp)
 		sp -= get_random_int() % 8192;
 	return sp & ~0xf;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(arch_align_stack);
+#endif
 
 unsigned long arch_randomize_brk(struct mm_struct *mm)
 {

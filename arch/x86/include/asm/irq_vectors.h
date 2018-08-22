@@ -28,11 +28,24 @@
 #define NMI_VECTOR			0x02
 #define MCE_VECTOR			0x12
 
+#ifndef CONFIG_UNIFIED_KERNEL
 /*
  * IDT vectors usable for external interrupt sources start at 0x20.
  * (0x80 is the syscall vector, 0x30-0x3f are for ISA)
  */
 #define FIRST_EXTERNAL_VECTOR		0x20
+#else
+/*
+ * IDT vectors usable for external interrupt sources start
+ * at 0x30, as 0x20-0x2f are used by Win32 system call implementation:
+ */
+#define FIRST_EXTERNAL_VECTOR		0x30
+/*
+ * For Unified Kernel, 16 more IRQ's are reserved for win32 system
+ * call implementation, and thus the number of potential APIC 
+ * interrupt sources is reduced by 16. 
+ */
+#endif
 /*
  * We start allocating at 0x21 to spread out vectors evenly between
  * priority levels. (0x80 is the syscall vector)
@@ -134,10 +147,17 @@
 #define IO_APIC_VECTOR_LIMIT		(32 * MAX_IO_APICS)
 
 #if defined(CONFIG_X86_IO_APIC) && defined(CONFIG_PCI_MSI)
+#ifndef CONFIG_UNIFIED_KERNEL
 #define NR_IRQS						\
 	(CPU_VECTOR_LIMIT > IO_APIC_VECTOR_LIMIT ?	\
 		(NR_VECTORS + CPU_VECTOR_LIMIT)  :	\
 		(NR_VECTORS + IO_APIC_VECTOR_LIMIT))
+#else
+#define NR_IRQS						\
+	(CPU_VECTOR_LIMIT > IO_APIC_VECTOR_LIMIT ?	\
+		(NR_VECTORS + CPU_VECTOR_LIMIT - 16)  :	\
+		(NR_VECTORS + IO_APIC_VECTOR_LIMIT - 16))
+#endif
 #elif defined(CONFIG_X86_IO_APIC)
 #define	NR_IRQS				(NR_VECTORS + IO_APIC_VECTOR_LIMIT)
 #elif defined(CONFIG_PCI_MSI)

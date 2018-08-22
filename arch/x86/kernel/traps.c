@@ -822,6 +822,46 @@ void __init early_trap_pf_init(void)
 #endif
 }
 
+#ifdef CONFIG_UNIFIED_KERNEL
+int set_w32system_gate(unsigned int n, void *addr)
+{
+	/* 0x20 ~ 0x2f could be set */
+	if ((n & 0xfffffff0) != 0x20)
+		return -1;
+	_set_gate(n, GATE_TRAP, addr, 0x3, 0, __KERNEL_CS);
+	return 0;
+}
+EXPORT_SYMBOL(set_w32system_gate);
+
+int backup_idt_entry(unsigned int n, unsigned long *a, unsigned long *b)
+{
+	unsigned long	*gate_addr;
+
+	/* 0x20 ~ 0x2f could be backup */
+	if ((n & 0xfffffff0) != 0x20)
+		return -1;
+	gate_addr = (unsigned long *)(idt_table + n);
+	*a = *gate_addr;
+	*b = *(gate_addr + 1);
+	return 0;
+}
+EXPORT_SYMBOL(backup_idt_entry);
+
+int restore_idt_entry(unsigned int n, unsigned long a, unsigned long b)
+{
+	unsigned long	*gate_addr;
+
+	/* 0x20 ~ 0x2f could be restore */
+	if ((n & 0xfffffff0) != 0x20)
+		return -1;
+	gate_addr = (unsigned long *)(idt_table + n);
+	*gate_addr = a;
+	*(gate_addr + 1) = b;
+	return 0;
+}
+EXPORT_SYMBOL(restore_idt_entry);
+#endif
+
 void __init trap_init(void)
 {
 	int i;

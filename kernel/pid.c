@@ -393,6 +393,9 @@ void attach_pid(struct task_struct *task, enum pid_type type)
 	struct pid_link *link = &task->pids[type];
 	hlist_add_head_rcu(&link->node, &link->pid->tasks[type]);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(find_task_by_vpid);
+#endif
 
 static void __change_pid(struct task_struct *task, enum pid_type type,
 			struct pid *new)

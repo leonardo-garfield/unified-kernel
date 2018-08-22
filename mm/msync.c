@@ -14,6 +14,10 @@
 #include <linux/syscalls.h>
 #include <linux/sched.h>
 
+#ifdef CONFIG_UNIFIED_KERNEL
+#include <linux/module.h>
+#endif
+
 /*
  * MS_SYNC syncs the entire file - including mappings.
  *
@@ -105,3 +109,6 @@ out_unlock:
 out:
 	return error ? : unmapped_error;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_msync);
+#endif

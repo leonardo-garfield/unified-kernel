@@ -413,6 +413,9 @@ void flush_ptrace_hw_breakpoint(struct task_struct *tsk)
 	t->debugreg6 = 0;
 	t->ptrace_dr7 = 0;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(flush_ptrace_hw_breakpoint);
+#endif
 
 void hw_breakpoint_restore(void)
 {

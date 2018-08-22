@@ -89,6 +89,18 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/task.h>
 
+#ifdef CONFIG_UNIFIED_KERNEL
+#include <linux/win32_thread.h>
+
+struct task_ethread_operations* tet_ops;
+
+void init_tet_ops(struct task_ethread_operations* ops)
+{
+    tet_ops = ops;
+}
+EXPORT_SYMBOL(init_tet_ops);
+#endif
+
 /*
  * Minimum number of threads to boot the kernel
  */
@@ -1068,6 +1080,9 @@ static int copy_files(unsigned long clone_flags, struct task_struct *tsk)
 out:
 	return error;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(copy_files);
+#endif
 
 static int copy_io(unsigned long clone_flags, struct task_struct *tsk)
 {
@@ -1372,7 +1387,11 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	INIT_LIST_HEAD(&p->sibling);
 	rcu_copy_process(p);
 	p->vfork_done = NULL;
+#ifdef CONFIG_UNIFIED_KERNEL
+	rwlock_init(&p->alloc_lock);
+#else
 	spin_lock_init(&p->alloc_lock);
+#endif
 
 	init_sigpending(&p->pending);
 
@@ -1517,6 +1536,12 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	 */
 	if ((clone_flags & (CLONE_VM|CLONE_VFORK)) == CLONE_VM)
 		p->sas_ss_sp = p->sas_ss_size = 0;
+
+#ifdef CONFIG_UNIFIED_KERNEL
+	p->ethread= NULL;
+    if(current->ethread)
+        tet_ops->ethread_notify_fork(current, p, clone_flags);
+#endif
 
 	/*
 	 * Syscall tracing and stepping should be turned off in the
@@ -1967,7 +1992,11 @@ static int unshare_fs(unsigned long unshare_flags, struct fs_struct **new_fsp)
 /*
  * Unshare file descriptor table if it is being shared
  */
+#ifdef CONFIG_UNIFIED_KERNEL
+int unshare_fd(unsigned long unshare_flags, struct files_struct **new_fdp)
+#else
 static int unshare_fd(unsigned long unshare_flags, struct files_struct **new_fdp)
+#endif
 {
 	struct files_struct *fd = current->files;
 	int error = 0;
@@ -1981,6 +2010,9 @@ static int unshare_fd(unsigned long unshare_flags, struct files_struct **new_fdp
 
 	return 0;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(unshare_fd);
+#endif
 
 /*
  * unshare allows a process to 'unshare' part of the process
@@ -2150,3 +2182,713 @@ int sysctl_max_threads(struct ctl_table *table, int write,
 
 	return 0;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(unshare_files);
+#endif
+
+#ifdef CONFIG_UNIFIED_KERNEL
+/* FIXME: added for NtCreateProcess() and NtCreateThread() */
+
+extern int init_new_context_from_task(struct task_struct *ptsk, struct task_struct *tsk, struct mm_struct *mm);
+
+static inline void clone_files(struct task_struct *tsk)
+{
+	if (tsk->files)
+		atomic_inc(&tsk->files->count);
+}
+
+static inline void clone_fs(struct task_struct *tsk)
+{
+	struct fs_struct *fs = tsk->fs;
+
+	spin_lock(&fs->lock);
+	if (fs->in_exec) {
+		spin_unlock(&fs->lock);
+		return;
+	}
+	fs->users++;
+	spin_unlock(&fs->lock);
+}
+
+static inline void clone_sighand(struct task_struct *tsk)
+{
+	atomic_inc(&tsk->sighand->count);
+}
+
+static inline void clone_signal(struct task_struct *tsk)
+{
+	atomic_inc(&tsk->signal->sigcnt);
+	atomic_inc(&tsk->signal->live);
+}
+
+static inline int clone_mm(struct task_struct *parent, struct task_struct *child)
+{
+	struct mm_struct *mm, *oldmm;
+
+	child->min_flt = child->maj_flt = 0;
+	child->nvcsw = child->nivcsw = 0;
+#ifdef CONFIG_DETECT_HUNG_TASK
+	child->last_switch_count = child->nvcsw + child->nivcsw;
+#endif
+
+	child->mm = NULL;
+	child->active_mm = NULL;
+
+	/*
+	 * Are we cloning a kernel thread?
+	 *
+	 * We need to steal a active VM for that..
+	 */
+	oldmm = parent->mm;
+	if (!oldmm)
+		return 0;
+
+	atomic_inc(&oldmm->mm_users);
+	mm = oldmm;
+
+	/*
+	 * There are cases where the PTL is held to ensure no
+	 * new threads start up in user mode using an mm, which
+	 * allows optimizing out ipis; the tlb_gather_mmu code
+	 * is an example.
+	 */
+	spin_unlock_wait(&oldmm->page_table_lock);
+
+	child->mm = mm;
+	child->active_mm = mm;
+
+	return 0;
+}
+
+static int dup_files(struct task_struct * tsk)
+{
+	struct files_struct *newf;
+	struct fdtable *new_fdt;
+	int error;
+
+	error = -ENOMEM;
+	newf = kmem_cache_alloc(files_cachep, GFP_KERNEL);
+	if (!newf)
+		goto out;
+
+	atomic_set(&newf->count, 1);
+	newf->resize_in_progress = false;
+	init_waitqueue_head(&newf->resize_wait);
+
+	spin_lock_init(&newf->file_lock);
+	newf->next_fd = 0;
+	new_fdt = &newf->fdtab;
+	new_fdt->max_fds = NR_OPEN_DEFAULT;
+	new_fdt->close_on_exec = (unsigned long *)&newf->close_on_exec_init;
+	new_fdt->open_fds = (unsigned long *)&newf->open_fds_init;
+	new_fdt->full_fds_bits = (unsigned long *)&newf->full_fds_bits_init;
+	new_fdt->fd = &newf->fd_array[0];
+	init_rcu_head(&new_fdt->rcu);
+
+	rcu_assign_pointer(newf->fdt, new_fdt);
+
+	tsk->files = newf;
+	error = 0;
+
+out:
+	return error;
+}
+
+static inline int dup_sighand(struct task_struct *parent, struct task_struct *child)
+{
+	struct sighand_struct *sig;
+
+	sig = kmem_cache_alloc(sighand_cachep, GFP_KERNEL);
+	rcu_assign_pointer(child->sighand, sig);
+	if (!sig)
+		return -ENOMEM;
+	atomic_set(&sig->count, 1);
+	memcpy(sig->action, current->sighand->action, sizeof(sig->action));
+	return 0;
+}
+
+static inline int create_mm(struct task_struct *parent, struct task_struct *child)
+{
+	struct mm_struct *mm;
+
+	mm = allocate_mm();
+	if (!mm)
+		return -ENOMEM;
+
+	/* Copy the current MM stuff.. */
+	memset(mm, 0, sizeof(*mm));
+	if (!mm_init(mm, parent, mm->user_ns))
+		return -ENOMEM;
+
+	init_new_context_from_task(parent, child, mm);
+
+	if (!mm->get_unmapped_area)
+		mm->get_unmapped_area = parent->mm->get_unmapped_area;
+
+	child->mm = mm;
+	child->active_mm = mm;
+
+	return 0;
+}
+
+static inline int dup_signal(struct task_struct *parent, struct task_struct *child)
+{
+	struct signal_struct *sig;
+
+	sig = kmem_cache_zalloc(signal_cachep, GFP_KERNEL);
+	child->signal = sig;
+	if (!sig)
+		return -ENOMEM;
+
+	sig->nr_threads = 1;
+	atomic_set(&sig->live, 1);
+	atomic_set(&sig->sigcnt, 1);
+
+	/* list_add(thread_node, thread_head) without INIT_LIST_HEAD() */
+	sig->thread_head = (struct list_head)LIST_HEAD_INIT(parent->thread_node);
+	parent->thread_node = (struct list_head)LIST_HEAD_INIT(sig->thread_head);
+
+	init_waitqueue_head(&sig->wait_chldexit);
+	sig->curr_target = child;
+	init_sigpending(&sig->shared_pending);
+	INIT_LIST_HEAD(&sig->posix_timers);
+	seqlock_init(&sig->stats_lock);
+	prev_cputime_init(&sig->prev_cputime);
+
+	hrtimer_init(&sig->real_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	sig->real_timer.function = it_real_fn;
+
+	task_lock(parent->group_leader);
+	memcpy(sig->rlim, parent->signal->rlim, sizeof sig->rlim);
+	task_unlock(parent->group_leader);
+
+	posix_cpu_timers_init_group(sig);
+
+	tty_audit_fork(sig);
+	sched_autogroup_fork(sig);
+
+
+	sig->oom_score_adj = parent->signal->oom_score_adj;
+	sig->oom_score_adj_min = parent->signal->oom_score_adj_min;
+
+	sig->has_child_subreaper = parent->signal->has_child_subreaper ||
+	parent->signal->is_child_subreaper;
+
+	mutex_init(&sig->cred_guard_mutex);
+
+#ifdef CONFIG_AUDIT
+	/* tty_audit_fork */
+	spin_lock_irq(&parent->sighand->siglock);
+	sig->audit_tty = parent->signal->audit_tty;
+	spin_unlock_irq(&parent->sighand->siglock);
+	sig->tty_audit_buf = NULL;
+#endif
+
+	return 0;
+}
+
+static inline int dup_fs(struct task_struct *parent, struct task_struct *child)
+{
+	child->fs = copy_fs_struct(parent->fs);
+	return child->fs ? 0 : -ENOMEM;
+}
+
+static struct task_struct *copy_process_from_task(struct task_struct *ptsk,
+		unsigned long process_flags,
+		unsigned long clone_flags,
+		unsigned long stack_start,
+		struct pt_regs *regs,
+		unsigned long stack_size,
+		int __user *child_tidptr,
+		struct pid *pid,
+		int trace,
+		unsigned long tls,
+		int node)
+{
+	int retval;
+	struct task_struct *p;
+	void *cgrp_ss_priv[CGROUP_CANFORK_COUNT] = {};
+
+	retval = security_task_create(clone_flags);
+	if (retval)
+		goto fork_out;
+
+	retval = -ENOMEM;
+	p = dup_task_struct(ptsk, node);
+	if (!p)
+		goto fork_out;
+
+	ftrace_graph_init_task(p);
+
+	rt_mutex_init_task(p);
+
+#ifdef CONFIG_PROVE_LOCKING
+	DEBUG_LOCKS_WARN_ON(!p->hardirqs_enabled);
+	DEBUG_LOCKS_WARN_ON(!p->softirqs_enabled);
+#endif
+	retval = -EAGAIN;
+	if (atomic_read(&p->real_cred->user->processes) >=
+			task_rlimit(p, RLIMIT_NPROC)) {
+		if (p->real_cred->user != INIT_USER &&
+		    !capable(CAP_SYS_ADMIN) && !capable(CAP_SYS_RESOURCE))
+			goto bad_fork_free;
+	}
+	ptsk->flags &= ~PF_NPROC_EXCEEDED;
+
+	retval = copy_creds(p, clone_flags);
+	if (retval < 0)
+		goto bad_fork_free;
+
+	/*
+	 * If multiple threads are within copy_process(), then this check
+	 * triggers too late. This doesn't hurt, the check is only there
+	 * to stop root fork bombs.
+	 */
+	retval = -EAGAIN;
+	if (nr_threads >= max_threads)
+		goto bad_fork_cleanup_count;
+
+	delayacct_tsk_init(p);	/* Must remain after dup_task_struct() */
+	p->flags &= ~(PF_SUPERPRIV | PF_WQ_WORKER);
+	p->flags |= PF_FORKNOEXEC;
+	INIT_LIST_HEAD(&p->children);
+	INIT_LIST_HEAD(&p->sibling);
+	rcu_copy_process(p);
+	p->vfork_done = NULL;
+	rwlock_init(&p->alloc_lock);
+
+	init_sigpending(&p->pending);
+
+	p->utime = p->stime = p->gtime = 0;
+	p->utimescaled = p->stimescaled = 0;
+	prev_cputime_init(&p->prev_cputime);
+
+#ifdef CONFIG_VIRT_CPU_ACCOUNTING_GEN
+	seqlock_init(&p->vtime_seqlock);
+	p->vtime_snap = 0;
+	p->vtime_snap_whence = VTIME_SLEEPING;
+#endif
+
+#if defined(SPLIT_RSS_COUNTING)
+	memset(&p->rss_stat, 0, sizeof(p->rss_stat));
+#endif
+
+	p->default_timer_slack_ns = ptsk->timer_slack_ns;
+
+	task_io_accounting_init(&p->ioac);
+	acct_clear_integrals(p);
+
+	posix_cpu_timers_init(p);
+
+	p->start_time = ktime_get_ns();
+	p->real_start_time = ktime_get_boot_ns();
+	p->io_context = NULL;
+	p->audit_context = NULL;
+	cgroup_fork(p);
+#ifdef CONFIG_NUMA
+	p->mempolicy = mpol_dup(p->mempolicy);
+ 	if (IS_ERR(p->mempolicy)) {
+ 		retval = PTR_ERR(p->mempolicy);
+ 		p->mempolicy = NULL;
+		goto bad_fork_cleanup_threadgroup_lock;
+ 	}
+#endif
+#ifdef CONFIG_CPUSETS
+	p->cpuset_mem_spread_rotor = NUMA_NO_NODE;
+	p->cpuset_slab_spread_rotor = NUMA_NO_NODE;
+	seqcount_init(&p->mems_allowed_seq);
+#endif
+#ifdef CONFIG_TRACE_IRQFLAGS
+	p->irq_events = 0;
+	p->hardirqs_enabled = 0;
+	p->hardirq_enable_ip = 0;
+	p->hardirq_enable_event = 0;
+	p->hardirq_disable_ip = _THIS_IP_;
+	p->hardirq_disable_event = 0;
+	p->softirqs_enabled = 1;
+	p->softirq_enable_ip = _THIS_IP_;
+	p->softirq_enable_event = 0;
+	p->softirq_disable_ip = 0;
+	p->softirq_disable_event = 0;
+	p->hardirq_context = 0;
+	p->softirq_context = 0;
+#endif
+
+	p->pagefault_disabled = 0;
+
+#ifdef CONFIG_LOCKDEP
+	p->lockdep_depth = 0; /* no locks held yet */
+	p->curr_chain_key = 0;
+	p->lockdep_recursion = 0;
+#endif
+
+#ifdef CONFIG_DEBUG_MUTEXES
+	p->blocked_on = NULL; /* not blocked yet */
+#endif
+#ifdef CONFIG_BCACHE
+	p->sequential_io	= 0;
+	p->sequential_io_avg	= 0;
+#endif
+
+	/* Perform scheduler related setup. Assign this task to a CPU. */
+	retval = sched_fork(clone_flags, p);
+	if (retval)
+		goto bad_fork_cleanup_policy;
+
+	retval = perf_event_init_task(p);
+	if (retval)
+		goto bad_fork_cleanup_policy;
+	retval = audit_alloc(p);
+	if (retval)
+		goto bad_fork_cleanup_perf;
+	/* copy all the process information */
+	shm_init_task(p);
+	retval = copy_semundo(clone_flags, p);
+	if (retval)
+		goto bad_fork_cleanup_audit;
+    if (process_flags & CREATE_PROCESS) {
+        retval = dup_files(p);
+        if (retval)
+            goto bad_fork_cleanup_semundo;
+        retval = dup_fs(ptsk, p);
+        if (retval)
+            goto bad_fork_cleanup_files;
+        retval = dup_sighand(ptsk, p);
+        if (retval)
+            goto bad_fork_cleanup_fs;
+        retval = dup_signal(ptsk, p);
+        if (retval)
+            goto bad_fork_cleanup_sighand;
+        retval = create_mm(ptsk, p);
+        if (retval)
+            goto bad_fork_cleanup_signal;
+    }
+    else {
+		clone_files(ptsk);
+		clone_fs(ptsk);
+		clone_sighand(ptsk);
+		clone_signal(ptsk);
+		clone_mm(ptsk, p);
+    }
+	retval = copy_namespaces(clone_flags, p);
+	if (retval)
+		goto bad_fork_cleanup_mm;
+	retval = copy_io(clone_flags, p);
+	if (retval)
+		goto bad_fork_cleanup_namespaces;
+	retval = copy_thread_tls(clone_flags, stack_start, stack_size, p, tls);
+	if (retval)
+		goto bad_fork_cleanup_io;
+
+	/* p->thread.io_bitmap_ptr is copied from current->thread.io_bitmap_ptr */
+	if (ptsk != current) {
+		if (ptsk->thread.io_bitmap_ptr) {
+			if (!current->thread.io_bitmap_ptr) {
+				/* p->thread.io_bitmap_ptr is shared with ptsk */
+				p->thread.io_bitmap_ptr = kmalloc(IO_BITMAP_BYTES, GFP_KERNEL);
+				if (!p->thread.io_bitmap_ptr) {
+					p->thread.io_bitmap_max = 0;
+					goto bad_fork_cleanup_namespaces;
+				}
+			}
+			memcpy(p->thread.io_bitmap_ptr, ptsk->thread.io_bitmap_ptr, IO_BITMAP_BYTES);
+		}
+		else {
+			if (current->thread.io_bitmap_ptr) {
+				kfree(p->thread.io_bitmap_ptr);
+				p->thread.io_bitmap_ptr = NULL;
+			}
+		}
+	}
+
+	if (pid != &init_struct_pid) {
+		pid = alloc_pid(p->nsproxy->pid_ns_for_children);
+		if (IS_ERR(pid)) {
+			retval = PTR_ERR(pid);
+			goto bad_fork_cleanup_io;
+		}
+	}
+
+	p->set_child_tid = (clone_flags & CLONE_CHILD_SETTID) ? child_tidptr : NULL;
+	/*
+	 * Clear TID on mm_release()?
+	 */
+	p->clear_child_tid = (clone_flags & CLONE_CHILD_CLEARTID) ? child_tidptr : NULL;
+#ifdef CONFIG_BLOCK
+	p->plug = NULL;
+#endif
+#ifdef CONFIG_FUTEX
+	p->robust_list = NULL;
+#ifdef CONFIG_COMPAT
+	p->compat_robust_list = NULL;
+#endif
+	INIT_LIST_HEAD(&p->pi_state_list);
+	p->pi_state_cache = NULL;
+#endif
+	/*
+	 * sigaltstack should be cleared when sharing the same VM
+	 */
+	if ((clone_flags & (CLONE_VM|CLONE_VFORK)) == CLONE_VM)
+		p->sas_ss_sp = p->sas_ss_size = 0;
+
+#ifdef CONFIG_UNIFIED_KERNEL
+	p->ethread= NULL;
+    if(current->ethread)
+        tet_ops->ethread_notify_fork(current, p, clone_flags);
+#endif
+
+	/*
+	 * Syscall tracing and stepping should be turned off in the
+	 * child regardless of CLONE_PTRACE.
+	 */
+	user_disable_single_step(p);
+	clear_tsk_thread_flag(p, TIF_SYSCALL_TRACE);
+#ifdef TIF_SYSCALL_EMU
+	clear_tsk_thread_flag(p, TIF_SYSCALL_EMU);
+#endif
+	clear_all_latency_tracing(p);
+
+	/* ok, now we should be set up.. */
+	p->pid = pid_nr(pid);
+	if (clone_flags & CLONE_THREAD) {
+		p->exit_signal = -1;
+		p->group_leader = current->group_leader;
+		p->tgid = current->tgid;
+	} else {
+		if (clone_flags & CLONE_PARENT)
+			p->exit_signal = current->group_leader->exit_signal;
+		else
+			p->exit_signal = (clone_flags & CSIGNAL);
+		p->group_leader = p;
+		p->tgid = p->pid;
+	}
+
+	p->nr_dirtied = 0;
+	p->nr_dirtied_pause = 128 >> (PAGE_SHIFT - 10);
+	p->dirty_paused_when = 0;
+
+	p->pdeath_signal = 0;
+	INIT_LIST_HEAD(&p->thread_group);
+	p->task_works = NULL;
+
+	threadgroup_change_begin(current);
+	/*
+	 * Ensure that the cgroup subsystem policies allow the new process to be
+	 * forked. It should be noted the the new process's css_set can be changed
+	 * between here and cgroup_post_fork() if an organisation operation is in
+	 * progress.
+	 */
+	retval = cgroup_can_fork(p, cgrp_ss_priv);
+	if (retval)
+		goto bad_fork_free_pid;
+
+	/*
+	 * Make it visible to the rest of the system, but dont wake it up yet.
+	 * Need tasklist lock for parent etc handling!
+	 */
+	write_lock_irq(&tasklist_lock);
+
+	/* CLONE_PARENT re-uses the old parent */
+	if (clone_flags & (CLONE_PARENT|CLONE_THREAD)) {
+		p->real_parent = current->real_parent;
+		p->parent_exec_id = current->parent_exec_id;
+	} else {
+		p->real_parent = current;
+		p->parent_exec_id = current->self_exec_id;
+	}
+
+	spin_lock(&current->sighand->siglock);
+
+	/*
+	 * Copy seccomp details explicitly here, in case they were changed
+	 * before holding sighand lock.
+	 */
+	copy_seccomp(p);
+
+	/*
+	 * Process group and session signals need to be delivered to just the
+	 * parent before the fork or both the parent and the child after the
+	 * fork. Restart if a signal comes in before we add the new process to
+	 * it's process group.
+	 * A fatal signal pending means that current will exit, so the new
+	 * thread can't slip out of an OOM kill (or normal SIGKILL).
+	*/
+	recalc_sigpending();
+	if (signal_pending(ptsk)) {
+		retval = -ERESTARTNOINTR;
+		goto bad_fork_cancel_cgroup;
+	}
+	if (unlikely(!(ns_of_pid(pid)->nr_hashed & PIDNS_HASH_ADDING))) {
+		retval = -ENOMEM;
+		goto bad_fork_cancel_cgroup;
+	}
+
+	if (likely(p->pid)) {
+		ptrace_init_task(p, (clone_flags & CLONE_PTRACE) || trace);
+
+		init_task_pid(p, PIDTYPE_PID, pid);
+		if (thread_group_leader(p)) {
+			init_task_pid(p, PIDTYPE_PGID, task_pgrp(current));
+			init_task_pid(p, PIDTYPE_SID, task_session(current));
+
+			if (is_child_reaper(pid)) {
+				ns_of_pid(pid)->child_reaper = p;
+				p->signal->flags |= SIGNAL_UNKILLABLE;
+			}
+
+			p->signal->leader_pid = pid;
+			p->signal->tty = tty_kref_get(ptsk->signal->tty);
+			list_add_tail(&p->sibling, &p->real_parent->children);
+			list_add_tail_rcu(&p->tasks, &init_task.tasks);
+			attach_pid(p, PIDTYPE_PGID);
+			attach_pid(p, PIDTYPE_SID);
+			__this_cpu_inc(process_counts);
+		} else {
+			ptsk->signal->nr_threads++;
+			atomic_inc(&ptsk->signal->live);
+			atomic_inc(&ptsk->signal->sigcnt);
+			list_add_tail_rcu(&p->thread_group,
+					  &p->group_leader->thread_group);
+			list_add_tail_rcu(&p->thread_node,
+					  &p->signal->thread_head);
+		}
+		attach_pid(p, PIDTYPE_PID);
+		nr_threads++;
+	}
+
+	total_forks++;
+	spin_unlock(&current->sighand->siglock);
+	syscall_tracepoint_update(p);
+	write_unlock_irq(&tasklist_lock);
+
+	proc_fork_connector(p);
+	cgroup_post_fork(p, cgrp_ss_priv);
+	threadgroup_change_end(current);
+	perf_event_fork(p);
+
+	trace_task_newtask(p, clone_flags);
+	uprobe_copy_process(p, clone_flags);
+
+	return p;
+
+bad_fork_cancel_cgroup:
+	spin_unlock(&ptsk->sighand->siglock);
+	write_unlock_irq(&tasklist_lock);
+	cgroup_cancel_fork(p, cgrp_ss_priv);
+bad_fork_free_pid:
+	threadgroup_change_end(current);
+	if (pid != &init_struct_pid)
+		free_pid(pid);
+bad_fork_cleanup_io:
+	if (p->io_context)
+		exit_io_context(p);
+bad_fork_cleanup_namespaces:
+	exit_task_namespaces(p);
+bad_fork_cleanup_mm:
+	if (p->mm)
+		mmput(p->mm);
+bad_fork_cleanup_signal:
+	if (!(clone_flags & CLONE_THREAD))
+		free_signal_struct(p->signal);
+bad_fork_cleanup_sighand:
+	__cleanup_sighand(p->sighand);
+bad_fork_cleanup_fs:
+	exit_fs(p); /* blocking */
+bad_fork_cleanup_files:
+	exit_files(p); /* blocking */
+bad_fork_cleanup_semundo:
+	exit_sem(p);
+bad_fork_cleanup_audit:
+	audit_free(p);
+bad_fork_cleanup_perf:
+	perf_event_free_task(p);
+bad_fork_cleanup_policy:
+#ifdef CONFIG_NUMA
+	mpol_put(p->mempolicy);
+bad_fork_cleanup_threadgroup_lock:
+#endif
+	delayacct_tsk_free(p);
+bad_fork_cleanup_count:
+	atomic_dec(&p->cred->user->processes);
+	exit_creds(p);
+bad_fork_free:
+	free_task(p);
+fork_out:
+	return ERR_PTR(retval);
+}
+
+long do_fork_from_task(struct task_struct *ptsk,
+		unsigned long process_flags,
+		unsigned long clone_flags,
+		unsigned long stack_start,
+		struct pt_regs *regs,
+		unsigned long stack_size,
+		int __user *parent_tidptr,
+		int __user *child_tidptr,
+		unsigned long tls)
+{
+	struct task_struct *p;
+	int trace = 0;
+	long nr;
+
+	/*
+	 * Determine whether and which event to report to ptracer.  When
+	 * called from kernel_thread or CLONE_UNTRACED is explicitly
+	 * requested, no event is reported; otherwise, report if the event
+	 * for the type of forking is enabled.
+	 */
+	if (!(clone_flags & CLONE_UNTRACED)) {
+		if (clone_flags & CLONE_VFORK)
+			trace = PTRACE_EVENT_VFORK;
+		else if ((clone_flags & CSIGNAL) != SIGCHLD)
+			trace = PTRACE_EVENT_CLONE;
+		else
+			trace = PTRACE_EVENT_FORK;
+
+		if (likely(!ptrace_event_enabled(current, trace)))
+			trace = 0;
+	}
+
+	p = copy_process_from_task(ptsk, process_flags, clone_flags, stack_start, regs, stack_size,
+			 child_tidptr, NULL, trace, tls, NUMA_NO_NODE);
+	/*
+	 * Do this prior waking up the new thread - the thread pointer
+	 * might get invalid after that point, if the thread exits quickly.
+	 */
+	if (!IS_ERR(p)) {
+		struct completion vfork;
+		struct pid *pid;
+
+		trace_sched_process_fork(ptsk, p);
+
+		pid = get_task_pid(p, PIDTYPE_PID);
+		nr = pid_vnr(pid);
+
+		if (clone_flags & CLONE_PARENT_SETTID)
+			put_user(nr, parent_tidptr);
+
+		if (clone_flags & CLONE_VFORK) {
+			p->vfork_done = &vfork;
+			init_completion(&vfork);
+			get_task_struct(p);
+		}
+
+		wake_up_new_task(p);
+
+		/* forking complete and child started to run, tell ptracer */
+		if (unlikely(trace))
+			ptrace_event_pid(trace, pid);
+
+		if (clone_flags & CLONE_VFORK) {
+			if (!wait_for_vfork_done(p, &vfork))
+				ptrace_event_pid(PTRACE_EVENT_VFORK_DONE, pid);
+		}
+
+		put_pid(pid);
+	} else {
+		nr = PTR_ERR(p);
+	}
+	return nr;
+}
+EXPORT_SYMBOL(do_fork_from_task);
+#endif

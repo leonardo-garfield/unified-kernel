@@ -1246,6 +1246,9 @@ out_release:
 	sock_release(sock);
 	return retval;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_socket);
+#endif
 
 /*
  *	Create a pair of connected sockets.
@@ -1351,6 +1354,9 @@ out_release_1:
 out:
 	return err;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_socketpair);
+#endif
 
 /*
  *	Bind a name to a socket. Nothing much to do here since it's
@@ -1508,6 +1514,9 @@ SYSCALL_DEFINE3(accept, int, fd, struct sockaddr __user *, upeer_sockaddr,
 {
 	return sys_accept4(fd, upeer_sockaddr, upeer_addrlen, 0);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_accept);
+#endif
 
 /*
  *	Attempt to connect to a socket with the server address.  The address
@@ -1713,6 +1722,9 @@ SYSCALL_DEFINE6(recvfrom, int, fd, void __user *, ubuf, size_t, size,
 out:
 	return err;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_recvfrom);
+#endif
 
 /*
  *	Receive a datagram from a socket.
@@ -1757,6 +1769,9 @@ out_put:
 	}
 	return err;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_setsockopt);
+#endif
 
 /*
  *	Get a socket option. Because we don't know the option lengths we have
@@ -1788,6 +1803,9 @@ out_put:
 	}
 	return err;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_getsockopt);
+#endif
 
 /*
  *	Shutdown a socket.
@@ -1807,6 +1825,9 @@ SYSCALL_DEFINE2(shutdown, int, fd, int, how)
 	}
 	return err;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_shutdown);
+#endif
 
 /* A couple of helpful macros for getting the address of the 32/64 bit
  * fields which are the same type (int / unsigned) on our platforms.

@@ -197,6 +197,9 @@ out_putf:
 out:
 	return error;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_fstatfs);
+#endif
 
 SYSCALL_DEFINE2(ftruncate, unsigned int, fd, unsigned long, length)
 {
@@ -216,6 +219,9 @@ SYSCALL_DEFINE2(truncate64, const char __user *, path, loff_t, length)
 {
 	return do_sys_truncate(path, length);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(do_truncate);
+#endif
 
 SYSCALL_DEFINE2(ftruncate64, unsigned int, fd, loff_t, length)
 {
@@ -328,6 +334,9 @@ SYSCALL_DEFINE4(fallocate, int, fd, int, mode, loff_t, offset, loff_t, len)
 	}
 	return error;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_ftruncate);
+#endif
 
 /*
  * access() needs to use the real uid/gid, not the effective uid/gid.
@@ -440,6 +449,9 @@ dput_and_out:
 out:
 	return error;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_chdir);
+#endif
 
 SYSCALL_DEFINE1(fchdir, unsigned int, fd)
 {
@@ -971,6 +983,9 @@ struct file *file_open_name(struct filename *name, int flags, umode_t mode)
 	int err = build_open_flags(flags, mode, &op);
 	return err ? ERR_PTR(err) : do_filp_open(AT_FDCWD, name, &op);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_open);
+#endif
 
 /**
  * filp_open - open file and return file pointer

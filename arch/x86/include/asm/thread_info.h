@@ -134,6 +134,11 @@ struct thread_info {
 #define _TIF_ADDR32		(1 << TIF_ADDR32)
 #define _TIF_X32		(1 << TIF_X32)
 
+#ifdef CONFIG_UNIFIED_KERNEL
+#define TIF_APC                 13
+#define _TIF_APC                (1<<TIF_APC)
+#endif
+
 /* work to do in syscall_trace_enter() */
 #define _TIF_WORK_SYSCALL_ENTRY	\
 	(_TIF_SYSCALL_TRACE | _TIF_SYSCALL_EMU | _TIF_SYSCALL_AUDIT |	\

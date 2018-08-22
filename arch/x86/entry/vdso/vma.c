@@ -228,6 +228,12 @@ int compat_arch_setup_additional_pages(struct linux_binprm *bprm,
 	return 0;
 #endif
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(compat_arch_setup_additional_pages);
+#endif
+#endif
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(arch_setup_additional_pages);
 #endif
 #else
 int arch_setup_additional_pages(struct linux_binprm *bprm, int uses_interp)

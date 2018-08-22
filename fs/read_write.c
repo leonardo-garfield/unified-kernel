@@ -573,6 +573,9 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 	}
 	return ret;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_read);
+#endif
 
 SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 		size_t, count)
@@ -590,6 +593,9 @@ SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 
 	return ret;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_write);
+#endif
 
 SYSCALL_DEFINE4(pread64, unsigned int, fd, char __user *, buf,
 			size_t, count, loff_t, pos)
@@ -610,6 +616,9 @@ SYSCALL_DEFINE4(pread64, unsigned int, fd, char __user *, buf,
 
 	return ret;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_pread64);
+#endif
 
 SYSCALL_DEFINE4(pwrite64, unsigned int, fd, const char __user *, buf,
 			 size_t, count, loff_t, pos)
@@ -630,6 +639,9 @@ SYSCALL_DEFINE4(pwrite64, unsigned int, fd, const char __user *, buf,
 
 	return ret;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_pwrite64);
+#endif
 
 /*
  * Reduce an iovec's length in-place.  Return the resulting number of segments

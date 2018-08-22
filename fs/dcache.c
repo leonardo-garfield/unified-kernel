@@ -3323,6 +3323,9 @@ out:
 	__putname(page);
 	return error;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_getcwd);
+#endif
 
 /*
  * Test whether new_dentry is a subdirectory of old_dentry.

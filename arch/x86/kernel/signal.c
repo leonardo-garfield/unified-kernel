@@ -42,6 +42,9 @@
 #include <asm/syscalls.h>
 
 #include <asm/sigframe.h>
+#ifdef CONFIG_UNIFIED_KERNEL
+#include <linux/module.h>
+#endif
 
 #define COPY(x)			do {			\
 	get_user_ex(regs->x, &sc->x);			\

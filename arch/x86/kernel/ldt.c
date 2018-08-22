@@ -155,6 +155,45 @@ out_unlock:
 	return retval;
 }
 
+#ifdef CONFIG_UNIFIED_KERNEL
+int init_new_context_from_task(struct task_struct *ptsk, struct task_struct *tsk, struct mm_struct *mm)
+{
+	struct ldt_struct *new_ldt;
+	struct mm_struct * old_mm;
+	int retval = 0;
+
+	mutex_init(&mm->context.lock);
+	old_mm = ptsk->mm;
+	if (!old_mm) {
+		mm->context.ldt = NULL;
+		return 0;
+	}
+
+	mutex_lock(&old_mm->context.lock);
+	if (!old_mm->context.ldt) {
+		mm->context.ldt = NULL;
+		goto out_unlock;
+	}
+
+	new_ldt = alloc_ldt_struct(old_mm->context.ldt->size);
+	if (!new_ldt) {
+		retval = -ENOMEM;
+		goto out_unlock;
+	}
+
+	memcpy(new_ldt->entries, old_mm->context.ldt->entries,
+	       new_ldt->size * LDT_ENTRY_SIZE);
+	finalize_ldt_struct(new_ldt);
+
+	mm->context.ldt = new_ldt;
+
+out_unlock:
+	mutex_unlock(&old_mm->context.lock);
+	return retval;
+
+}
+#endif
+
 /*
  * No need to lock the MM as we are the last user
  *

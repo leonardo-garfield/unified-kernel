@@ -139,6 +139,11 @@ struct nameidata;
 #define VMACACHE_SIZE (1U << VMACACHE_BITS)
 #define VMACACHE_MASK (VMACACHE_SIZE - 1)
 
+#ifdef CONFIG_UNIFIED_KERNEL
+#define	CREATE_PROCESS	1
+#define	CREATE_THREAD	2
+#endif
+
 /*
  * These are the constant used to fake the fixed-point load-average
  * counting. Some notes:
@@ -1606,7 +1611,11 @@ struct task_struct {
    	u32 self_exec_id;
 /* Protection of (de-)allocation: mm, files, fs, tty, keyrings, mems_allowed,
  * mempolicy */
+#ifndef CONFIG_UNIFIED_KERNEL
 	spinlock_t alloc_lock;
+#else
+	rwlock_t alloc_lock;
+#endif
 
 	/* Protection of the PI data structures: */
 	raw_spinlock_t pi_lock;
@@ -1832,6 +1841,9 @@ struct task_struct {
 #endif
 	int pagefault_disabled;
 /* CPU-specific state of this task */
+#ifdef CONFIG_UNIFIED_KERNEL
+    struct ethread *ethread;
+#endif
 	struct thread_struct thread;
 /*
  * WARNING: on x86, 'thread_struct' contains a variable-sized
@@ -2757,12 +2769,20 @@ static inline int thread_group_empty(struct task_struct *p)
  */
 static inline void task_lock(struct task_struct *p)
 {
+#ifndef CONFIG_UNIFIED_KERNEL
 	spin_lock(&p->alloc_lock);
+#else
+	write_lock(&p->alloc_lock);
+#endif
 }
 
 static inline void task_unlock(struct task_struct *p)
 {
+#ifndef CONFIG_UNIFIED_KERNEL
 	spin_unlock(&p->alloc_lock);
+#else
+	write_unlock(&p->alloc_lock);
+#endif
 }
 
 extern struct sighand_struct *__lock_task_sighand(struct task_struct *tsk,

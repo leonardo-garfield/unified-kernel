@@ -1822,6 +1822,9 @@ SYSCALL_DEFINE1(epoll_create, int, size)
 
 	return sys_epoll_create1(0);
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_epoll_create);
+#endif
 
 /*
  * The following function implements the controller interface for
@@ -1840,9 +1843,17 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 	struct eventpoll *tep = NULL;
 
 	error = -EFAULT;
+#ifdef CONFIG_UNIFIED_KERNEL
+	if ((unsigned long)event >= 0xC0000000) {
+		memcpy(&epds, event, sizeof(struct epoll_event));
+	}
+	else if (copy_from_user(&epds, event, sizeof(struct epoll_event)))
+		goto error_return;
+#else
 	if (ep_op_has_event(op) &&
 	    copy_from_user(&epds, event, sizeof(struct epoll_event)))
 		goto error_return;
+#endif
 
 	error = -EBADF;
 	f = fdget(epfd);
@@ -1964,6 +1975,9 @@ error_return:
 
 	return error;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_epoll_ctl);
+#endif
 
 /*
  * Implement the event wait interface for the eventpoll file. It is the kernel
@@ -1980,9 +1994,11 @@ SYSCALL_DEFINE4(epoll_wait, int, epfd, struct epoll_event __user *, events,
 	if (maxevents <= 0 || maxevents > EP_MAX_EVENTS)
 		return -EINVAL;
 
+#ifndef CONFIG_UNIFIED_KERNEL
 	/* Verify that the area passed by the user is writeable */
 	if (!access_ok(VERIFY_WRITE, events, maxevents * sizeof(struct epoll_event)))
 		return -EFAULT;
+#endif
 
 	/* Get the "struct file *" for the eventpoll file */
 	f = fdget(epfd);
@@ -2010,6 +2026,50 @@ error_fput:
 	fdput(f);
 	return error;
 }
+#ifdef CONFIG_UNIFIED_KERNEL
+EXPORT_SYMBOL(sys_epoll_wait);
+#endif
+
+#ifdef CONFIG_UNIFIED_KERNEL
+int uk_epoll_wait(int epfd, struct epoll_event __user * events,
+		int maxevents, int timeout)
+{
+	int error;
+	struct fd f;
+	struct eventpoll *ep;
+
+	/* The maximum number of event must be greater than zero */
+	if (maxevents <= 0 || maxevents > EP_MAX_EVENTS)
+		return -EINVAL;
+
+	/* Get the "struct file *" for the eventpoll file */
+	f = fdget(epfd);
+	if (!f.file)
+		return -EBADF;
+
+	/*
+	 * We have to check that the file structure underneath the fd
+	 * the user passed to us _is_ an eventpoll file.
+	 */
+	error = -EINVAL;
+	if (!is_file_epoll(f.file))
+		goto error_fput;
+
+	/*
+	 * At this point it is safe to assume that the "private_data" contains
+	 * our own data structure.
+	 */
+	ep = f.file->private_data;
+
+	/* Time to fish for events ... */
+	error = ep_poll(ep, events, maxevents, timeout);
+
+error_fput:
+	fdput(f);
+	return error;
+}
+EXPORT_SYMBOL(uk_epoll_wait);
+#endif
 
 /*
  * Implement the event wait interface for the eventpoll file. It is the kernel
